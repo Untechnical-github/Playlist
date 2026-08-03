@@ -5,6 +5,11 @@ import requests
 BASE = "https://www.googleapis.com/youtube/v3"
 
 
+class ManualSortRequiredError(Exception):
+    """プレイリストの並び順設定が「カスタム順（手動）」になっていないと position 指定の
+    更新が拒否されるため、そのことを示す専用の例外。"""
+
+
 def list_playlist_items(auth_header: str, playlist_id: str) -> List[Dict[str, Any]]:
     """公式 YouTube Data API v3 でプレイリストの中身を position 順に取得する。"""
     items: List[Dict[str, Any]] = []
@@ -82,4 +87,16 @@ def set_item_position(
         headers={"Authorization": auth_header, "Content-Type": "application/json"},
         json=body,
     )
+    if resp.status_code == 400:
+        reason = None
+        try:
+            reason = resp.json()["error"]["errors"][0]["reason"]
+        except (ValueError, KeyError, IndexError):
+            pass
+        if reason == "manualSortRequired":
+            raise ManualSortRequiredError(
+                "プレイリストの並び順設定が「カスタム順」になっていません。"
+                "YouTube Musicアプリでこのプレイリストを開き、並び替えメニューから"
+                "「カスタム順」を選択してから、もう一度お試しください。"
+            )
     resp.raise_for_status()

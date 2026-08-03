@@ -7,7 +7,7 @@ from core.apply import apply_updates, compute_position_updates
 from core.auth import get_auth_header
 from core.fetch import get_playlist_tracks
 from core.planner import GroupedPlan, group_tracks
-from core.youtube_api import get_playlist_title
+from core.youtube_api import ManualSortRequiredError, get_playlist_title
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -110,18 +110,35 @@ def run_apply(playlist_id: str, application_id: str, interaction_token: str) -> 
     )
 
 
+def report_error(application_id: str, interaction_token: str, mode: str, message: str) -> None:
+    payload = {"content": message, "embeds": [], "components": []}
+    try:
+        if mode == "apply":
+            edit_original(application_id, interaction_token, payload)
+        else:
+            post_followup(application_id, interaction_token, payload)
+    except requests.RequestException:
+        pass
+
+
 def main() -> None:
     mode = os.environ["TASK_MODE"]
     playlist_id = os.environ["PLAYLIST_ID"]
     application_id = os.environ["APPLICATION_ID"]
     interaction_token = os.environ["INTERACTION_TOKEN"]
 
-    if mode == "preview":
-        run_preview(playlist_id, application_id, interaction_token)
-    elif mode == "apply":
-        run_apply(playlist_id, application_id, interaction_token)
-    else:
-        sys.exit(f"unknown mode: {mode}")
+    try:
+        if mode == "preview":
+            run_preview(playlist_id, application_id, interaction_token)
+        elif mode == "apply":
+            run_apply(playlist_id, application_id, interaction_token)
+        else:
+            sys.exit(f"unknown mode: {mode}")
+    except ManualSortRequiredError as e:
+        report_error(application_id, interaction_token, mode, str(e))
+    except Exception as e:
+        report_error(application_id, interaction_token, mode, f"エラーが発生しました: {e}")
+        raise
 
 
 if __name__ == "__main__":
