@@ -4,3 +4,5 @@ plan.json
 __pycache__/
 *.pyc
 .pytest_cache/
+worker/.wrangler/
+worker/node_modules/
