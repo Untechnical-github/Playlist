@@ -1,6 +1,6 @@
-name = "playlist-sort-bot"
+name = "playlist"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
 [vars]
-GITHUB_REPO = "Untechnical-github/youtube-music-playlist-sort"
+GITHUB_REPO = "Untechnical-github/Playlist"
