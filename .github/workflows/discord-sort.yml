@@ -1,0 +1,35 @@
+name: Discord Sort
+
+on:
+  repository_dispatch:
+    types: [discord-sort]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write auth files
+        run: |
+          mkdir -p auth
+          echo "$OAUTH_TOKEN_JSON" > auth/oauth.json
+          echo "$OAUTH_CLIENT_JSON" > auth/oauth_client.json
+        env:
+          OAUTH_TOKEN_JSON: ${{ secrets.OAUTH_TOKEN_JSON }}
+          OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
+
+      - name: Run task
+        run: python github_task.py
+        env:
+          TASK_MODE: ${{ github.event.client_payload.mode }}
+          PLAYLIST_ID: ${{ github.event.client_payload.playlist_id }}
+          APPLICATION_ID: ${{ github.event.client_payload.application_id }}
+          INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}

@@ -1,0 +1,6 @@
+auth/*.json
+playlist_snapshot.json
+plan.json
+__pycache__/
+*.pyc
+.pytest_cache/

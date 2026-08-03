@@ -1,0 +1,6 @@
+name = "playlist-sort-bot"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+GITHUB_REPO = "yourname/yourrepo"
