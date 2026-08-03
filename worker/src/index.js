@@ -133,7 +133,10 @@ async function handleComponent(interaction, env, ctx) {
         interaction_token: interaction.token,
       }).catch(() => {})
     );
-    return json({ type: 6 });
+    return json({
+      type: 7,
+      data: { content: "反映中…", components: [] },
+    });
   }
 
   return json({ type: 6 });
