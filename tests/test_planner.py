@@ -28,26 +28,48 @@ def test_multi_track_artists_are_merged_into_a_single_block_even_if_split_across
     ]
     result = build_plan(tracks)
     # Eve と sumika は2曲ずつあるので塊としてアルファベット順（Eve, sumika）に前方へ。
-    # Bump は1曲だけなので塊にはならず、末尾（元の相対位置のまま）に残る。
-    assert [x.video_id for x in result] == ["1", "4", "2", "5", "3"]
+    # Bump（単独タグ）は sumika と隣接しているため、その塊に取り込まれる。
+    assert [x.video_id for x in result] == ["1", "4", "2", "3", "5"]
 
 
-def test_single_track_artists_stay_in_original_relative_order_at_the_end():
+def test_single_tag_track_adjacent_to_a_block_is_absorbed_into_it():
     tracks = [
-        t("1", ["Zard"]),  # single
-        t("2", ["Aiko"]),  # block
-        t("3", ["Bump"]),  # single
-        t("4", ["Aiko"]),  # block
+        t("1", ["Zard"]),  # 単独タグだが Aiko の隣にいるので Aiko の塊に取り込まれる
+        t("2", ["Aiko"]),
+        t("3", ["Bump"]),  # こちらも単独タグ、同じく Aiko に隣接して取り込まれる
+        t("4", ["Aiko"]),
     ]
     result = build_plan(tracks)
-    # 塊(Aiko)が前方に、単独曲(Zard, Bump)は再ソートされず元の相対順のまま末尾に残る
-    assert [x.video_id for x in result] == ["2", "4", "1", "3"]
+    assert [x.video_id for x in result] == ["1", "2", "3", "4"]
+
+
+def test_single_tag_track_isolated_from_any_block_stays_in_the_tail():
+    tracks = [
+        t("1", ["Solo1"]),
+        t("2", ["Solo2"]),
+    ]
+    result = build_plan(tracks)
+    # どちらも単独タグで、隣接する塊が無いので末尾（元の相対順）に残る
+    assert [x.video_id for x in result] == ["1", "2"]
+
+
+def test_scattered_same_artist_in_the_tail_still_forms_a_block():
+    tracks = [
+        t("1", ["ArtistQ"]),
+        t("2", ["Solo1"]),
+        t("3", ["ArtistQ"]),
+        t("4", ["Solo2"]),
+    ]
+    result = build_plan(tracks)
+    # ArtistQ は離れていても2曲あるので必ず1つの塊になる（Solo1も隣接して取り込まれる）
+    assert [x.video_id for x in result] == ["1", "2", "3", "4"]
 
 
 def test_block_internal_order_preserves_original_relative_order():
     tracks = [t("1", ["Eve"]), t("2", ["Bump"]), t("3", ["Eve"])]
     result = build_plan(tracks)
-    assert [x.video_id for x in result] == ["1", "3", "2"]
+    # Bump（単独タグ）は Eve の間に挟まれているため Eve の塊に取り込まれる
+    assert [x.video_id for x in result] == ["1", "2", "3"]
 
 
 def test_collab_track_follows_the_artist_block_it_is_currently_adjacent_to():
@@ -57,15 +79,15 @@ def test_collab_track_follows_the_artist_block_it_is_currently_adjacent_to():
         t("3", ["Bump"]),
     ]
     result = build_plan(tracks)
-    # Aiko+コラボ曲で2曲の塊になるので前方へ、Bump は単独曲として末尾に残る
+    # Aiko+コラボ曲で2曲の塊になるので前方へ、Bump は単独タグかつ隣接する塊が無いので末尾に残る
     assert [x.video_id for x in result] == ["1", "2", "3"]
 
 
 def test_collab_track_with_no_matching_neighbor_falls_back_to_first_listed_artist():
     tracks = [t("1", ["Zard", "Bump"]), t("2", ["Aiko"])]
     result = build_plan(tracks)
-    # 隣接する Aiko とは一致しないので先頭アーティスト Zard で確定するが、どちらも単独曲なので
-    # 塊は生まれず、元の相対順のまま
+    # 隣接する Aiko とは一致しないので先頭アーティスト Zard で確定するが、どちらも単独タグかつ
+    # 互いに隣接する塊が無いので、塊は生まれず元の相対順のまま
     assert [x.video_id for x in result] == ["1", "2"]
 
 
@@ -74,7 +96,7 @@ def test_unknown_ugc_track_follows_its_current_neighbor_and_can_form_a_block():
     ugc = t("2", [], video_type="MUSIC_VIDEO_TYPE_UGC")
     known_b = t("3", ["Bump"])
     result = build_plan([known_a, ugc, known_b])
-    # ugc は Aiko の隣にいたので Aiko の塊に入り2曲になる。Bump は単独曲として末尾。
+    # ugc は Aiko の隣にいたので Aiko の塊に入り2曲になる。Bump は単独タグで隣接する塊が無いので末尾。
     assert [x.video_id for x in result] == ["1", "2", "3"]
 
 
@@ -84,19 +106,11 @@ def test_fully_isolated_unknown_track_goes_to_the_end():
     assert [x.video_id for x in result] == ["1"]
 
 
-def test_unknown_track_next_to_a_single_track_does_not_form_a_block():
-    tracks = [t("1", ["Bump"]), t("2", [], video_type="MUSIC_VIDEO_TYPE_UGC"), t("3", ["Aiko"])]
-    result = build_plan(tracks)
-    # ugc(2) は前方の Bump に付くが、Bump+ugc も Aiko も1曲ずつなので塊にはならず、
-    # 元の相対順のまま末尾に残る
-    assert [x.video_id for x in result] == ["1", "2", "3"]
-
-
 def test_case_insensitive_artist_names_are_merged_into_a_block():
     tracks = [t("1", ["RADWIMPS"]), t("2", ["Bump"]), t("3", ["Radwimps"])]
     result = build_plan(tracks)
-    # RADWIMPS/Radwimps は同一アーティストとして2曲の塊になり前方へ、Bump は単独曲として末尾
-    assert [x.video_id for x in result] == ["1", "3", "2"]
+    # RADWIMPS/Radwimps は同一アーティストとして2曲の塊になり、間の Bump（単独タグ）も取り込まれる
+    assert [x.video_id for x in result] == ["1", "2", "3"]
 
 
 def test_compute_position_updates_reorders_correctly():

@@ -11,20 +11,36 @@ def normalize(name: str) -> str:
 
 def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
     """曲ごとに所属させるアーティストのバケツ（正規化済みアーティスト名）を決める。
-    - アーティストが1人だけで明確な曲は、そのアーティスト名で確定。
-    - コラボ曲は、現在隣接している曲のバケツが自分のアーティストのいずれかと一致すればそこに所属
-      （＝手動で特定アーティストの棚に置いた位置を尊重する）。一致しなければ先頭アーティストで確定。
+    - アーティストが1人だけで明確な曲でも、同じアーティストの曲が他に無い（実質単独タグの）
+      場合は、隣接している曲のバケツにそのまま所属できる（＝手動で特定アーティストの隣に
+      置いた位置を尊重する）。一方、同じアーティストの曲が他にもあるなら、位置に関係なく
+      常にそのアーティスト名で確定する（本物の複数曲アーティストを位置で分断させないため）。
+    - コラボ曲は、現在隣接している曲のバケツが自分のアーティストのいずれかと一致すればそこに所属。
+      一致しなければ先頭アーティストで確定。
     - アーティスト情報が無い曲（UGC等）は、隣接している曲のバケツにそのまま所属する。
-      どちらの隣にも確定したバケツが無ければ None（＝末尾送りの「不明」扱い）のまま。
+    - 隣接曲からも所属が決まらなかった曲は、単独タグ・コラボ曲なら自分のタグ（の先頭）で確定、
+      完全に不明な曲は None（＝末尾送りの「不明」扱い）のまま。
     """
     n = len(tracks)
     buckets: List[Optional[str]] = [None] * n
+
+    tag_counts: Dict[str, int] = {}
+    for t in tracks:
+        if len(t.artists) == 1 and not t.is_unknown:
+            key = normalize(t.artists[0])
+            tag_counts[key] = tag_counts.get(key, 0) + 1
+
+    single_idx: List[int] = []
     ambiguous_idx: List[int] = []
     unknown_idx: List[int] = []
 
     for i, t in enumerate(tracks):
         if len(t.artists) == 1 and not t.is_unknown:
-            buckets[i] = normalize(t.artists[0])
+            key = normalize(t.artists[0])
+            if tag_counts[key] >= 2:
+                buckets[i] = key
+            else:
+                single_idx.append(i)
         elif t.artists:
             ambiguous_idx.append(i)
         else:
@@ -42,6 +58,14 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
                     buckets[i] = buckets[j]
                     changed = True
                     break
+        for i in single_idx:
+            if buckets[i] is not None:
+                continue
+            for j in (i - 1, i + 1):
+                if 0 <= j < n and buckets[j] is not None:
+                    buckets[i] = buckets[j]
+                    changed = True
+                    break
         for i in unknown_idx:
             if buckets[i] is not None:
                 continue
@@ -52,6 +76,9 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
                     break
 
     for i in ambiguous_idx:
+        if buckets[i] is None:
+            buckets[i] = normalize(tracks[i].artists[0])
+    for i in single_idx:
         if buckets[i] is None:
             buckets[i] = normalize(tracks[i].artists[0])
 
