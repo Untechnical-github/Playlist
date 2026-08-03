@@ -83,14 +83,12 @@ python cli.py apply --yes           # 確認をスキップ（将来のDiscord�
 ## Discord bot
 
 スマホからでも `/sort` コマンドで並び替えを実行できる。`core/` はUIに依存しないので、
-CLIと全く同じロジック（`core.fetch` / `core.planner` / `core.apply`）をどちらの方式でも使う。
+CLIと全く同じロジック（`core.fetch` / `core.planner` / `core.apply`）を使う。
 
-- **方式A（`bot.py`）**: discord.pyのGateway常時接続方式。実装はシンプルだが、bot専用に
-  PCやVPSを常時起動しておく必要がある。
-- **方式B（推奨・常時起動不要）**: DiscordのHTTP Interactions方式。**GitHub Actions + Cloudflare
-  Workers** で完結し、常時起動するサーバーが不要。以下は方式Bの手順。
+DiscordのHTTP Interactions方式を採用しており、**GitHub Actions + Cloudflare Workers** で
+完結する。常時起動するサーバーは不要。
 
-## 方式B: GitHub Actions + Cloudflare Workers セットアップ
+## セットアップ手順
 
 ### 全体の流れ
 
@@ -122,7 +120,6 @@ PINGを送って検証するため、Workerが先に動いていないと保存�
 ### 2. Discord Developer Portal
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) でアプリを作成
-   （既に方式A用に作っている場合はそれを流用してよい）
 2. 「General Information」ページで **APPLICATION ID** と **PUBLIC KEY** を控える
 3. 「Bot」ページで **Bot Token** を取得（控えておく。他人に共有しない）。Privileged Gateway
    Intentsは不要
@@ -184,55 +181,26 @@ Botを招待したDiscordサーバーで `/sort` と入力し、プレイリス�
 起動には数秒〜数十秒かかることがある。プレビューが表示されたら「反映する」を押して反映されるか
 確認する。GitHub側の実行状況はリポジトリの「Actions」タブから確認できる。
 
-### 旧: 方式A（discord.py、常時起動PC向け）のセットアップ
-
-1. [Discord Developer Portal](https://discord.com/developers/applications) で
-   「New Application」からアプリを作成
-2. 左メニュー「Bot」→「Reset Token」でトークンを取得（控えておく。他人に共有しない）
-3. 「Bot」ページで以下のPrivileged Gateway Intentsは**オンにする必要はない**
-   （スラッシュコマンドのみ使用するため）
-4. 左メニュー「OAuth2」→「URL Generator」で
-   - SCOPES: `bot`, `applications.commands`
-   - BOT PERMISSIONS: `Send Messages`, `Embed Links`
-   - 生成されたURLを開いて、botを自分のサーバー（または自分だけのテストサーバー）に招待
-5. bot を動かすマシン（自分のPC、Raspberry Pi、VPSなど常時起動できる環境）で環境変数を設定して起動
-   ```
-   export DISCORD_BOT_TOKEN="控えたトークン"
-   python bot.py
-   ```
-   （Windows PowerShellの場合は `$env:DISCORD_BOT_TOKEN = "..."`）
-6. サーバー上で `/sort` と入力すると、自分が所有するプレイリストがオートコンプリートで
-   候補表示される（公式APIの `playlists.list(mine=true)` を利用）。選んで実行すると、
-   並び替え案がプレビュー表示され、「反映する」ボタンを押すと実際に反映される。
-   本人以外はボタンを押せない。
-
 ### 補足
 
-- bot 自体は `auth/oauth.json` / `auth/oauth_client.json` をそのまま使う。OAuthのリフレッシュ
-  トークンは長期間有効で自動更新されるため、Cookie方式と違って定期的な手動再取得は基本的に不要。
-- botを動かすマシンを長時間止めずに起動し続ける必要がある（GitHub Actions等のスケジュール実行では
-  スラッシュコマンドの常時待受けはできない）。無料枠のあるクラウド（Railway、Fly.io等）や、
-  常時起動しているPC/Raspberry Piでの運用を想定。
-- （方式A）`/sort` 実行のたびに毎回 `fetch` → `plan` を計算し直す。ボタンを押した時点の
-  プレイリストの状態が最初の確認時と変わっていた場合は安全のため中止し、再実行を促す。
-- （方式B）状態を一切引き継がない設計上、「反映する」を押した時点でもう一度最新の状態を取得して
+- Worker/GitHub Actionsは `auth/oauth.json` / `auth/oauth_client.json` の中身をそのまま
+  Secretsとして使う。OAuthのリフレッシュトークンは長期間有効で自動更新されるため、Cookie方式と
+  違って定期的な手動再取得は基本的に不要。
+- 状態を一切引き継がない設計上、「反映する」を押した時点でもう一度最新の状態を取得して
   計算し直してから反映する（プレビュー表示時との差分チェックはしない。押した時点で見えている
   内容が最新のプレイリストと異なっていた場合、押した時点の最新状態を基準に反映される）。
+- GitHub Actionsのジョブ起動には数秒〜数十秒かかることがある。Discordのフォローアップメッセージ
+  送信は該当インタラクションのトークン発行から15分以内に行う必要があるが、通常の処理時間なら
+  十分間に合う。
+- `repository_dispatch` の起動にはGitHubトークンに対象リポジトリへの書き込み権限相当が必要。
+  fine-grained PATを使う場合は「Contents: Read and write」権限が必要になる点に注意。
 
-## 既知の限界・今後の検証事項
+## 既知の限界
 
 - **五十音順の限界**: API が読み仮名を提供しないため、漢字アーティスト名の厳密な五十音順は
   出せない。現状は Unicode 正規化 (`NFKC` + casefold) した文字列のコードポイント順。
 - **非公開プレイリストは非対応**: アーティスト情報の取得が認証なしアクセスに依存しているため、
   「非公開」設定のプレイリストは扱えない（「限定公開」であれば問題ない）。
-- **Discord bot はローカルでの動作確認まで**: 方式A（`bot.py`）・方式B
-  （`worker/src/index.js`, `github_task.py`, `register_commands.py`）ともに
-  import・コマンド登録・構文・ペイロード組み立てまでは確認済みだが、実際のDiscordサーバー上
-  でのやり取り（Cloudflare Workerへの署名付きリクエスト到達、GitHub Actionsの起動、Discordへの
-  Webhook投稿）は未検証。初回はテスト用サーバーで一通り動作確認すること。
-- **方式Bの起動遅延**: GitHub Actionsのジョブ起動には数秒〜数十秒かかることがある。Discordの
-  フォローアップメッセージ送信は該当インタラクションのトークン発行から15分以内に行う必要が
-  あるが、通常の処理時間なら十分間に合う。
-- **方式BのGitHubトークン権限**: `repository_dispatch` の起動には対象リポジトリへの書き込み
-  権限相当が必要。fine-grained PATを使う場合は「Contents: Read and write」権限が必要になる点に
-  注意。
+- **プレイリストの並び順設定**: プレイリストの並び順が「カスタム順」以外（例えば「追加順」等）に
+  なっていると、公式APIが `position` 指定を拒否する（`manualSortRequired`）。その場合はエラー
+  メッセージがDiscordに表示されるので、YouTube Musicアプリで並び順を「カスタム順」に戻せば良い。
