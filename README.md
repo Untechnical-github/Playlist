@@ -169,7 +169,8 @@ PINGを送って検証するため、Workerが先に動いていないと保存�
    ```
    wrangler deploy
    ```
-   成功すると `https://playlist-sort-bot.<自分のサブドメイン>.workers.dev` のようなURLが表示される
+   成功すると `https://playlist.<自分のサブドメイン>.workers.dev` のようなURLが表示される
+   （Worker名は `wrangler.toml` の `name` で変更できるが、小文字英数字とハイフンのみ使用可）
 
 ### 4. Discordの Interactions Endpoint URL を設定する
 
