@@ -12,11 +12,18 @@ from core.youtube_api import ManualSortRequiredError, get_playlist_title
 DISCORD_API = "https://discord.com/api/v10"
 
 
+def _raise_with_body(resp: requests.Response) -> None:
+    if resp.status_code >= 400:
+        raise requests.exceptions.HTTPError(
+            f"{resp.status_code} error from Discord: {resp.text}", response=resp
+        )
+
+
 def post_followup(application_id: str, interaction_token: str, payload: dict) -> None:
     resp = requests.post(
         f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}", json=payload
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
 
 
 def edit_original(application_id: str, interaction_token: str, payload: dict) -> None:
@@ -24,28 +31,53 @@ def edit_original(application_id: str, interaction_token: str, payload: dict) ->
         f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}/messages/@original",
         json=payload,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
+
+
+# Discord embed の実際の上限（フィールド数25、フィールド値1024文字、埋め込み合計6000文字）に
+# 収まるよう、余裕を持たせた予算で切り詰める。
+MAX_FIELDS = 25
+MAX_FIELD_VALUE = 1024
+MAX_EMBED_TOTAL = 5500
 
 
 def build_embed(title: str, grouped: GroupedPlan) -> dict:
+    embed_title = f"並び替えプレビュー: {title}"
     fields = []
+    total_len = len(embed_title)
+    omitted_blocks = 0
+
     for artist, tracks in grouped.blocks:
+        name = f"{artist}（{len(tracks)}曲）"
         value = "\n".join(f"・{t.title}" for t in tracks)
-        if len(value) > 1000:
-            value = value[:1000] + "\n…"
-        fields.append({"name": f"{artist}（{len(tracks)}曲）", "value": value, "inline": False})
-    if grouped.tail:
-        value = "、".join(t.title for t in grouped.tail)
-        if len(value) > 1000:
-            value = value[:1000] + "…"
+        if len(value) > MAX_FIELD_VALUE - 10:
+            value = value[: MAX_FIELD_VALUE - 10] + "\n…"
+        entry_len = len(name) + len(value)
+        # 末尾用の枠を1つ残しておく
+        if len(fields) >= MAX_FIELDS - 1 or total_len + entry_len > MAX_EMBED_TOTAL:
+            omitted_blocks += 1
+            continue
+        fields.append({"name": name, "value": value, "inline": False})
+        total_len += entry_len
+
+    if omitted_blocks:
         fields.append(
             {
-                "name": f"単独曲・不明（{len(grouped.tail)}曲、末尾のまま）",
-                "value": value,
+                "name": "…ほか",
+                "value": f"表示しきれなかった塊が {omitted_blocks} 件あります",
                 "inline": False,
             }
         )
-    embed = {"title": f"並び替えプレビュー: {title}", "color": 0x5865F2, "fields": fields}
+
+    if grouped.tail:
+        name = f"単独曲・不明（{len(grouped.tail)}曲、末尾のまま）"
+        value = "、".join(t.title for t in grouped.tail)
+        if len(value) > MAX_FIELD_VALUE - 10:
+            value = value[: MAX_FIELD_VALUE - 10] + "…"
+        if len(fields) < MAX_FIELDS and total_len + len(name) + len(value) <= MAX_EMBED_TOTAL:
+            fields.append({"name": name, "value": value, "inline": False})
+
+    embed = {"title": embed_title, "color": 0x5865F2, "fields": fields}
     if not fields:
         embed["description"] = "曲がありません。"
     return embed
