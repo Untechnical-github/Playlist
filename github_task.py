@@ -35,53 +35,96 @@ def edit_original(application_id: str, interaction_token: str, payload: dict) ->
     _raise_with_body(resp)
 
 
-# Discord embed の実際の上限（フィールド数25、フィールド値1024文字、埋め込み合計6000文字）に
-# 収まるよう、余裕を持たせた予算で切り詰める。
+# Discord embed の実際の上限（フィールド数25、フィールド値1024文字、埋め込み合計6000文字、
+# 1メッセージあたりembed最大10個）に収まるよう、複数のembed・複数のメッセージに分割する。
+# 何も省略しない（切り詰めるのは1フィールド内の曲名一覧が1024文字を超える場合のみ）。
 MAX_FIELDS = 25
 MAX_FIELD_VALUE = 1024
 MAX_EMBED_TOTAL = 5500
+MAX_EMBEDS_PER_MESSAGE = 10
 
 
-def build_embed(title: str, grouped: GroupedPlan) -> dict:
-    embed_title = f"並び替えプレビュー: {title}"
+def _split_text(text: str, sep: str, limit: int) -> list:
+    """text を sep の境目でできるだけ壊さずに、limit 文字以内のチャンクへ分割する。"""
+    parts = text.split(sep)
+    chunks: list = []
+    current = ""
+    for part in parts:
+        if len(part) > limit:
+            part = part[: limit - 1] + "…"
+        candidate = f"{current}{sep}{part}" if current else part
+        if len(candidate) > limit and current:
+            chunks.append(current)
+            current = part
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks or [""]
+
+
+def _fields_for(name: str, text: str, sep: str) -> list:
+    """1件分の (見出し, 本文) を、1024文字を超える場合は複数フィールドに分割して返す。
+    何も省略しない。
+    """
+    chunks = _split_text(text, sep, MAX_FIELD_VALUE - 1)
     fields = []
+    for i, chunk in enumerate(chunks):
+        field_name = name if i == 0 else f"{name}（続き）"
+        fields.append({"name": field_name[:256], "value": chunk, "inline": False})
+    return fields
+
+
+def build_embeds(title: str, grouped: GroupedPlan) -> list:
+    embed_title = f"並び替えプレビュー: {title}"
+    embeds: list = []
+    fields: list = []
     total_len = len(embed_title)
-    omitted_blocks = 0
 
-    for artist, tracks in grouped.blocks:
-        name = f"{artist}（{len(tracks)}曲）"
-        value = "\n".join(f"・{t.title}" for t in tracks)
-        if len(value) > MAX_FIELD_VALUE - 10:
-            value = value[: MAX_FIELD_VALUE - 10] + "\n…"
-        entry_len = len(name) + len(value)
-        # 末尾用の枠を1つ残しておく
-        if len(fields) >= MAX_FIELDS - 1 or total_len + entry_len > MAX_EMBED_TOTAL:
-            omitted_blocks += 1
-            continue
-        fields.append({"name": name, "value": value, "inline": False})
-        total_len += entry_len
+    def flush():
+        nonlocal fields, total_len
+        if fields:
+            embeds.append({"color": 0x5865F2, "fields": fields})
+        fields = []
+        total_len = len(embed_title)
 
-    if omitted_blocks:
-        fields.append(
-            {
-                "name": "…ほか",
-                "value": f"表示しきれなかった塊が {omitted_blocks} 件あります",
-                "inline": False,
-            }
+    entries = [
+        (f"{artist}（{len(tracks)}曲）", "\n".join(f"・{t.title}" for t in tracks), "\n")
+        for artist, tracks in grouped.blocks
+    ]
+    if grouped.tail:
+        entries.append(
+            (
+                f"単独曲・不明（{len(grouped.tail)}曲、末尾のまま）",
+                "、".join(t.title for t in grouped.tail),
+                "、",
+            )
         )
 
-    if grouped.tail:
-        name = f"単独曲・不明（{len(grouped.tail)}曲、末尾のまま）"
-        value = "、".join(t.title for t in grouped.tail)
-        if len(value) > MAX_FIELD_VALUE - 10:
-            value = value[: MAX_FIELD_VALUE - 10] + "…"
-        if len(fields) < MAX_FIELDS and total_len + len(name) + len(value) <= MAX_EMBED_TOTAL:
-            fields.append({"name": name, "value": value, "inline": False})
+    for name, text, sep in entries:
+        for field in _fields_for(name, text, sep):
+            entry_len = len(field["name"]) + len(field["value"])
+            if len(fields) >= MAX_FIELDS or total_len + entry_len > MAX_EMBED_TOTAL:
+                flush()
+            fields.append(field)
+            total_len += entry_len
+    flush()
 
-    embed = {"title": embed_title, "color": 0x5865F2, "fields": fields}
-    if not fields:
-        embed["description"] = "曲がありません。"
-    return embed
+    if not embeds:
+        embeds = [{"color": 0x5865F2, "description": "曲がありません。"}]
+
+    embeds[0]["title"] = embed_title
+    if len(embeds) > 1:
+        for i, e in enumerate(embeds):
+            e["footer"] = {"text": f"{i + 1}/{len(embeds)}"}
+
+    return embeds
+
+
+def chunk_embeds(embeds: list) -> list:
+    return [
+        embeds[i : i + MAX_EMBEDS_PER_MESSAGE] for i in range(0, len(embeds), MAX_EMBEDS_PER_MESSAGE)
+    ]
 
 
 def build_buttons(playlist_id: str) -> list:
@@ -115,11 +158,13 @@ def run_preview(playlist_id: str, application_id: str, interaction_token: str) -
         )
         return
 
-    post_followup(
-        application_id,
-        interaction_token,
-        {"embeds": [build_embed(title, grouped)], "components": build_buttons(playlist_id)},
-    )
+    embeds = build_embeds(title, grouped)
+    chunks = chunk_embeds(embeds)
+    for i, chunk in enumerate(chunks):
+        payload = {"embeds": chunk}
+        if i == len(chunks) - 1:
+            payload["components"] = build_buttons(playlist_id)
+        post_followup(application_id, interaction_token, payload)
 
 
 def run_apply(playlist_id: str, application_id: str, interaction_token: str) -> None:
