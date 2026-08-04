@@ -1,20 +1,72 @@
+import difflib
 import unicodedata
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .models import Track
 
+# 表記ゆれの自動統合に使う類似度の閾値・最短文字数。誤爆を避けるため、ある程度長い名前
+# （短い名前は1文字違いでも別アーティストの可能性が高いため対象外）にのみ適用する。
+FUZZY_MATCH_THRESHOLD = 0.92
+FUZZY_MATCH_MIN_LENGTH = 6
+
 
 def normalize(name: str) -> str:
     return unicodedata.normalize("NFKC", name).casefold()
 
 
-def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
-    """曲ごとに所属させるアーティストのバケツ（正規化済みアーティスト名）を決める。
-    - アーティストが1人だけで明確な曲でも、同じアーティストの曲が他に無い（実質単独タグの）
+def _canon(name: str, alias_map: Dict[str, str]) -> str:
+    """正規化した上で、artist_groups.json のエイリアス定義（表記ゆれの自動統合含む）が
+    あれば代表グループ名に読み替える。"""
+    key = normalize(name)
+    return alias_map.get(key, key)
+
+
+def _auto_merge_similar_names(tracks: List[Track], alias_map: Dict[str, str]) -> Dict[str, str]:
+    """"Macaroni Empitsu" と "macaroni enpitsu" のような、ほぼ同一だが厳密には異なる表記を
+    自動で同一アーティストとして統合する。artist_groups.json で明示的に定義済みのキーは
+    （意図した振り分けを壊さないよう）対象から除外する。
+    """
+    raw_keys = set()
+    for t in tracks:
+        for a in t.artists:
+            raw_keys.add(normalize(a))
+
+    candidates = sorted(k for k in raw_keys if k not in alias_map)
+
+    parent = {k: k for k in candidates}
+
+    def find(k: str) -> str:
+        while parent[k] != k:
+            k = parent[k]
+        return k
+
+    for i in range(len(candidates)):
+        a = candidates[i]
+        if len(a) < FUZZY_MATCH_MIN_LENGTH:
+            continue
+        for j in range(i + 1, len(candidates)):
+            b = candidates[j]
+            if len(b) < FUZZY_MATCH_MIN_LENGTH:
+                continue
+            if difflib.SequenceMatcher(None, a, b).ratio() >= FUZZY_MATCH_THRESHOLD:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    if ra < rb:
+                        parent[rb] = ra
+                    else:
+                        parent[ra] = rb
+
+    return {k: find(k) for k in candidates if find(k) != k}
+
+
+def _assign_buckets(tracks: List[Track], alias_map: Dict[str, str]) -> List[Optional[str]]:
+    """曲ごとに所属させるアーティストのバケツ（正規化済みアーティスト名、またはエイリアス先の
+    代表グループ名）を決める。
+    - アーティストが1人だけで明確な曲でも、同じバケツの曲が他に無い（実質単独タグの）
       場合は、隣接している曲のバケツにそのまま所属できる（＝手動で特定アーティストの隣に
-      置いた位置を尊重する）。一方、同じアーティストの曲が他にもあるなら、位置に関係なく
-      常にそのアーティスト名で確定する（本物の複数曲アーティストを位置で分断させないため）。
+      置いた位置を尊重する）。一方、同じバケツの曲が他にもあるなら、位置に関係なく
+      常にそのバケツで確定する（本物の複数曲アーティストを位置で分断させないため）。
     - コラボ曲は、現在隣接している曲のバケツが自分のアーティストのいずれかと一致すればそこに所属。
       一致しなければ先頭アーティストで確定。
     - アーティスト情報が無い曲（UGC等）は、隣接している曲のバケツにそのまま所属する。
@@ -24,10 +76,13 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
     n = len(tracks)
     buckets: List[Optional[str]] = [None] * n
 
+    # 「本当に複数曲あるか」は、単独タグの曲だけでなくコラボ曲での登場も含めて数える。
+    # コラボ曲でしか登場しないアーティスト（例: 別名義の曲が多いキャラクター名義など）も
+    # 正しく「複数曲アーティスト」として認識できるようにするため。
     tag_counts: Dict[str, int] = {}
     for t in tracks:
-        if len(t.artists) == 1 and not t.is_unknown:
-            key = normalize(t.artists[0])
+        for a in t.artists:
+            key = _canon(a, alias_map)
             tag_counts[key] = tag_counts.get(key, 0) + 1
 
     single_idx: List[int] = []
@@ -36,13 +91,26 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
 
     for i, t in enumerate(tracks):
         if len(t.artists) == 1 and not t.is_unknown:
-            key = normalize(t.artists[0])
+            key = _canon(t.artists[0], alias_map)
             if tag_counts[key] >= 2:
                 buckets[i] = key
             else:
                 single_idx.append(i)
         elif t.artists:
-            ambiguous_idx.append(i)
+            # コラボ曲でも、掲載アーティストのいずれかが既に本物の複数曲アーティストなら
+            # 位置に関係なく即座にそちらへ確定する（単独タグの曲と同じ優先度）。
+            matched = next(
+                (
+                    _canon(a, alias_map)
+                    for a in t.artists
+                    if tag_counts.get(_canon(a, alias_map), 0) >= 2
+                ),
+                None,
+            )
+            if matched is not None:
+                buckets[i] = matched
+            else:
+                ambiguous_idx.append(i)
         else:
             unknown_idx.append(i)
 
@@ -52,7 +120,7 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
         for i in ambiguous_idx:
             if buckets[i] is not None:
                 continue
-            keys = {normalize(a) for a in tracks[i].artists}
+            keys = {_canon(a, alias_map) for a in tracks[i].artists}
             for j in (i - 1, i + 1):
                 if 0 <= j < n and buckets[j] in keys:
                     buckets[i] = buckets[j]
@@ -77,10 +145,10 @@ def _assign_buckets(tracks: List[Track]) -> List[Optional[str]]:
 
     for i in ambiguous_idx:
         if buckets[i] is None:
-            buckets[i] = normalize(tracks[i].artists[0])
+            buckets[i] = _canon(tracks[i].artists[0], alias_map)
     for i in single_idx:
         if buckets[i] is None:
-            buckets[i] = normalize(tracks[i].artists[0])
+            buckets[i] = _canon(tracks[i].artists[0], alias_map)
 
     return buckets
 
@@ -100,13 +168,25 @@ class GroupedPlan:
         return result
 
 
-def group_tracks(tracks: List[Track]) -> GroupedPlan:
+def group_tracks(
+    tracks: List[Track],
+    alias_map: Optional[Dict[str, str]] = None,
+    group_display: Optional[Dict[str, str]] = None,
+) -> GroupedPlan:
     """曲が2曲以上あるアーティスト（塊）だけをアルファベット順にまとめる。
     塊の中の曲順は元の相対順を維持する（重要視していないため）。
     曲が1曲しかないアーティスト、およびバケツが決まらなかった曲（不明）は、
     塊とは別に tail へ、元の相対順のまま残す（再ソートしない）。
+
+    alias_map / group_display は artist_groups.json（`core.aliases.load_artist_groups`）から
+    読み込んだ、複数のアーティスト名を1つのグループとして扱うための対応表。
     """
-    buckets = _assign_buckets(tracks)
+    alias_map = dict(alias_map or {})
+    group_display = dict(group_display or {})
+
+    alias_map.update(_auto_merge_similar_names(tracks, alias_map))
+
+    buckets = _assign_buckets(tracks, alias_map)
 
     counts: Dict[str, int] = {}
     for b in buckets:
@@ -123,8 +203,8 @@ def group_tracks(tracks: List[Track]) -> GroupedPlan:
             if b not in block_groups:
                 block_groups[b] = []
                 block_order.append(b)
-                block_display[b] = next(
-                    (a for a in t.artists if normalize(a) == b),
+                block_display[b] = group_display.get(b) or next(
+                    (a for a in t.artists if _canon(a, alias_map) == b),
                     t.artists[0] if t.artists else b,
                 )
             block_groups[b].append(t)
@@ -139,5 +219,9 @@ def group_tracks(tracks: List[Track]) -> GroupedPlan:
     )
 
 
-def build_plan(tracks: List[Track]) -> List[Track]:
-    return group_tracks(tracks).flatten()
+def build_plan(
+    tracks: List[Track],
+    alias_map: Optional[Dict[str, str]] = None,
+    group_display: Optional[Dict[str, str]] = None,
+) -> List[Track]:
+    return group_tracks(tracks, alias_map, group_display).flatten()

@@ -3,6 +3,7 @@ import json
 import sys
 from pathlib import Path
 
+from core.aliases import load_artist_groups
 from core.apply import apply_updates, compute_position_updates
 from core.auth import get_auth_header
 from core.fetch import get_playlist_tracks
@@ -37,7 +38,8 @@ def cmd_fetch(args):
 def cmd_plan(args):
     snapshot = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
     tracks = [Track.from_dict(d) for d in snapshot["tracks"]]
-    grouped = group_tracks(tracks)
+    alias_map, group_display = load_artist_groups(snapshot["playlistId"])
+    grouped = group_tracks(tracks, alias_map, group_display)
     new_order = grouped.flatten()
 
     print("--- 変更後の並び ---")

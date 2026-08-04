@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.apply import compute_position_updates
 from core.models import Track
-from core.planner import build_plan
+from core.planner import _auto_merge_similar_names, build_plan, group_tracks
 
 
 def t(video_id, artists, title=None, video_type="MUSIC_VIDEO_TYPE_ATV"):
@@ -111,6 +111,60 @@ def test_case_insensitive_artist_names_are_merged_into_a_block():
     result = build_plan(tracks)
     # RADWIMPS/Radwimps は同一アーティストとして2曲の塊になり、間の Bump（単独タグ）も取り込まれる
     assert [x.video_id for x in result] == ["1", "2", "3"]
+
+
+def test_fuzzy_typo_variant_of_artist_name_is_merged_automatically():
+    tracks = [
+        t("1", ["Macaroni Empitsu"]),
+        t("2", ["macaroni enpitsu"]),
+        t("3", ["macaroni enpitsu"]),
+    ]
+    grouped = group_tracks(tracks)
+    assert len(grouped.blocks) == 1
+    _, block_tracks = grouped.blocks[0]
+    assert [x.video_id for x in block_tracks] == ["1", "2", "3"]
+    assert grouped.tail == []
+
+
+def test_fuzzy_merge_does_not_trigger_on_short_or_dissimilar_names():
+    tracks = [t("1", ["Aimyon"]), t("2", ["Aimer"]), t("3", ["Uru"])]
+    merges = _auto_merge_similar_names(tracks, {})
+    # Aimyon と Aimer は文字列としてそれなりに違う（短めで紛れやすい）ので統合されない
+    assert merges == {}
+
+
+def test_artist_group_alias_merges_unrelated_tags_into_one_block():
+    tracks = [
+        t("r1", ["ryo (supercell)"]),
+        t("r2", ["ryo (supercell)"]),
+        t("k1", ["Kaguya(cv. Yuko Natsuyoshi)"]),
+        t("k2", ["Kaguya(cv. Yuko Natsuyoshi)"]),
+    ]
+    alias_map = {
+        "ryo (supercell)": "kaguya",
+        "kaguya(cv. yuko natsuyoshi)": "kaguya",
+        "kaguya": "kaguya",
+    }
+    group_display = {"kaguya": "Kaguya"}
+
+    grouped = group_tracks(tracks, alias_map, group_display)
+    assert len(grouped.blocks) == 1
+    name, block_tracks = grouped.blocks[0]
+    assert name == "Kaguya"
+    assert [x.video_id for x in block_tracks] == ["r1", "r2", "k1", "k2"]
+    assert grouped.tail == []
+
+
+def test_without_alias_map_unrelated_tags_stay_separate_blocks():
+    tracks = [
+        t("r1", ["ryo (supercell)"]),
+        t("r2", ["ryo (supercell)"]),
+        t("k1", ["Kaguya(cv. Yuko Natsuyoshi)"]),
+        t("k2", ["Kaguya(cv. Yuko Natsuyoshi)"]),
+    ]
+    grouped = group_tracks(tracks)
+    names = [name for name, _ in grouped.blocks]
+    assert names == ["Kaguya(cv. Yuko Natsuyoshi)", "ryo (supercell)"]
 
 
 def test_compute_position_updates_reorders_correctly():

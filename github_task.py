@@ -3,6 +3,7 @@ import sys
 
 import requests
 
+from core.aliases import load_artist_groups
 from core.apply import apply_updates, compute_position_updates
 from core.auth import get_auth_header
 from core.fetch import get_playlist_tracks
@@ -104,7 +105,8 @@ def run_preview(playlist_id: str, application_id: str, interaction_token: str) -
         post_followup(application_id, interaction_token, {"content": "曲がありませんでした。"})
         return
 
-    grouped = group_tracks(tracks)
+    alias_map, group_display = load_artist_groups(playlist_id)
+    grouped = group_tracks(tracks, alias_map, group_display)
     target = grouped.flatten()
 
     if [t.item_id for t in target] == [t.item_id for t in tracks]:
@@ -123,7 +125,8 @@ def run_preview(playlist_id: str, application_id: str, interaction_token: str) -
 def run_apply(playlist_id: str, application_id: str, interaction_token: str) -> None:
     auth_header = get_auth_header()
     current = get_playlist_tracks(auth_header, playlist_id)
-    target = group_tracks(current).flatten()
+    alias_map, group_display = load_artist_groups(playlist_id)
+    target = group_tracks(current, alias_map, group_display).flatten()
 
     updates = compute_position_updates(current, target)
     if not updates:
