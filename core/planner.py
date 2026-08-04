@@ -60,6 +60,65 @@ def _auto_merge_similar_names(tracks: List[Track], alias_map: Dict[str, str]) ->
     return {k: find(k) for k in candidates if find(k) != k}
 
 
+def _is_katakana_only(text: str) -> bool:
+    """カタカナ（と長音符・中点・空白・半角/全角の区別を無視した英数字）だけで構成されているか。
+    漢字が混じっている場合は False（人名の読みは辞書変換だけでは正しく求められないため対象外）。
+    """
+    has_katakana = False
+    for ch in text:
+        if "゠" <= ch <= "ヿ":
+            has_katakana = True
+            continue
+        if ch.isspace() or ch in "・-ー.":
+            continue
+        if ch.isascii():
+            continue
+        return False
+    return has_katakana
+
+
+def _to_romaji(text: str) -> str:
+    try:
+        import pykakasi
+    except ImportError:
+        return normalize(text)
+
+    kks = pykakasi.kakasi()
+    romaji = "".join(item["hepburn"] for item in kks.convert(text))
+    return normalize(romaji)
+
+
+def _auto_merge_transliterations(tracks: List[Track], alias_map: Dict[str, str]) -> Dict[str, str]:
+    """"ヨルシカ"（カタカナ）と "Yorushika"（ローマ字）のような、カタカナ表記とその
+    ローマ字表記を自動で同一アーティストとして統合する。漢字を含む表記は読みが一意に
+    決まらないため対象外。artist_groups.json で明示的に定義済みのキーも対象外。
+    """
+    raw_by_norm: Dict[str, str] = {}
+    for t in tracks:
+        for a in t.artists:
+            raw_by_norm.setdefault(normalize(a), a)
+
+    candidates = {k: v for k, v in raw_by_norm.items() if k not in alias_map}
+    if not candidates:
+        return {}
+
+    groups: Dict[str, List[str]] = {}
+    for norm_key, raw in candidates.items():
+        romaji_key = _to_romaji(raw) if _is_katakana_only(raw) else norm_key
+        groups.setdefault(romaji_key, []).append(norm_key)
+
+    merges: Dict[str, str] = {}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        canonical = sorted(members)[0]
+        for m in members:
+            if m != canonical:
+                merges[m] = canonical
+
+    return merges
+
+
 def _assign_buckets(tracks: List[Track], alias_map: Dict[str, str]) -> List[Optional[str]]:
     """曲ごとに所属させるアーティストのバケツ（正規化済みアーティスト名、またはエイリアス先の
     代表グループ名）を決める。
@@ -185,6 +244,7 @@ def group_tracks(
     group_display = dict(group_display or {})
 
     alias_map.update(_auto_merge_similar_names(tracks, alias_map))
+    alias_map.update(_auto_merge_transliterations(tracks, alias_map))
 
     buckets = _assign_buckets(tracks, alias_map)
 

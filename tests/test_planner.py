@@ -5,7 +5,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.apply import compute_position_updates
 from core.models import Track
-from core.planner import _auto_merge_similar_names, build_plan, group_tracks
+from core.planner import (
+    _auto_merge_similar_names,
+    _auto_merge_transliterations,
+    _is_katakana_only,
+    build_plan,
+    group_tracks,
+)
 
 
 def t(video_id, artists, title=None, video_type="MUSIC_VIDEO_TYPE_ATV"):
@@ -131,6 +137,31 @@ def test_fuzzy_merge_does_not_trigger_on_short_or_dissimilar_names():
     merges = _auto_merge_similar_names(tracks, {})
     # Aimyon と Aimer は文字列としてそれなりに違う（短めで紛れやすい）ので統合されない
     assert merges == {}
+
+
+def test_katakana_and_romaji_spelling_of_same_artist_are_merged_automatically():
+    tracks = [t("1", ["ヨルシカ"]), t("2", ["Yorushika"])]
+    grouped = group_tracks(tracks)
+    assert len(grouped.blocks) == 1
+    name, block_tracks = grouped.blocks[0]
+    assert name in ("ヨルシカ", "Yorushika", "yorushika")
+    assert [x.video_id for x in block_tracks] == ["1", "2"]
+    assert grouped.tail == []
+
+
+def test_kanji_names_are_not_auto_merged_by_transliteration():
+    # 漢字の読みは辞書変換だけでは一意に決まらないため、対象外（誤爆防止）
+    tracks = [t("1", ["米津玄師"]), t("2", ["Kenshi Yonezu"])]
+    merges = _auto_merge_transliterations(tracks, {})
+    assert merges == {}
+
+
+def test_is_katakana_only():
+    assert _is_katakana_only("ヨルシカ") is True
+    assert _is_katakana_only("ヨルシカ・") is True
+    assert _is_katakana_only("かぐや") is False
+    assert _is_katakana_only("米津玄師") is False
+    assert _is_katakana_only("Yorushika") is False
 
 
 def test_artist_group_alias_merges_unrelated_tags_into_one_block():
