@@ -21,7 +21,7 @@ COMMANDS = [
     },
     {
         "name": "score",
-        "description": "プレイリストの曲をYouTube再生回数でスコアリングする",
+        "description": "再生回数がしきい値以上の曲を「Playlist」に追加する",
         "options": [
             {
                 "type": 3,
@@ -29,7 +29,13 @@ COMMANDS = [
                 "description": "対象のプレイリスト",
                 "required": True,
                 "autocomplete": True,
-            }
+            },
+            {
+                "type": 4,
+                "name": "threshold",
+                "description": "しきい値（万回再生単位。例: 100=100万回、5000=5000万回、20000=2億回）",
+                "required": True,
+            },
         ],
     },
 ]

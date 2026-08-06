@@ -100,11 +100,13 @@ async function handleCommand(interaction, env, ctx) {
   }
 
   const mode = interaction.data.name === "score" ? "score" : "preview";
+  const thresholdOpt = (interaction.data.options || []).find((o) => o.name === "threshold");
 
   ctx.waitUntil(
     triggerGithubAction(env, {
       mode,
       playlist_id: playlistId.value,
+      threshold: thresholdOpt ? thresholdOpt.value : null,
       application_id: interaction.application_id,
       interaction_token: interaction.token,
     }).catch(() => {})

@@ -70,6 +70,23 @@ def get_playlist_title(auth_header: str, playlist_id: str) -> Optional[str]:
     return items[0]["snippet"]["title"] if items else None
 
 
+def add_playlist_item(auth_header: str, playlist_id: str, video_id: str) -> None:
+    """プレイリストの末尾に動画を追加する。"""
+    body = {
+        "snippet": {
+            "playlistId": playlist_id,
+            "resourceId": {"kind": "youtube#video", "videoId": video_id},
+        }
+    }
+    resp = requests.post(
+        f"{BASE}/playlistItems",
+        params={"part": "snippet"},
+        headers={"Authorization": auth_header, "Content-Type": "application/json"},
+        json=body,
+    )
+    resp.raise_for_status()
+
+
 def set_item_position(
     auth_header: str, playlist_id: str, item_id: str, video_id: str, position: int
 ) -> None:

@@ -276,3 +276,23 @@ python score_playlist.py <プレイリストID> --output scores.json
 - **YouTube Data API v3のクォータに注意**: `search.list`は1回100ユニット消費し、デフォルトの
   1日あたり10,000ユニット枠では**1日あたり約100曲分**が上限の目安になる。大きいプレイリストは
   複数日に分けるか、Google Cloud Consoleでクォータ引き上げを申請する必要がある。
+
+### Discordの`/score`コマンド
+
+`/sort`と同じ仕組み（Cloudflare Worker → GitHub Actions）で、Discordから実行できる。
+CLI版（`python score_playlist.py`）とは動作が異なり、しきい値以上の曲を選んで
+**「Playlist」という名前のプレイリストに自動で追加**し、前回実行時からの新規追加分だけを
+メッセージに表示する（`github_score_task.py`）。
+
+```
+/score playlist:<対象プレイリスト> threshold:<しきい値（万回再生単位）>
+```
+
+- `threshold`は「万回再生」単位。例: `100` → 100万回再生以上、`5000` → 5000万回再生以上、
+  `20000` → 2億回再生以上の曲を対象にする
+- 対象の曲は自分のプレイリスト一覧から**タイトルが完全一致する「Playlist」**というプレイリストに
+  追加される（見つからない場合はその旨をメッセージで返す）
+- 既に「Playlist」に入っている曲は再追加されず、**新規に追加された曲だけ**がメッセージに表示される
+  （何も省略せず、長い場合は複数メッセージに分割される）
+- プレイリストへの追加にはOAuth（並び替えツールと同じ`auth/oauth.json`）を使うため、
+  GitHub Actions側の追加設定は不要
