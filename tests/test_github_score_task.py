@@ -103,3 +103,44 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
     assert "Song B" not in combined  # しきい値未満
     assert "Song C" not in combined  # 既に追加済みで今回も条件を満たすので追加/削除どちらの報告にも出ない
     assert "Old Song" in combined  # 削除された曲として報告される
+
+
+def test_resolve_override_artist_matches_on_title_substring():
+    overrides = {"少女レイ": "BUMP OF CHICKEN"}
+    assert gst.resolve_override_artist("少女レイ / 星街すいせい(Cover)", overrides) == "BUMP OF CHICKEN"
+    assert gst.resolve_override_artist("全く関係ない曲", overrides) is None
+
+
+def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monkeypatch):
+    # カバー動画自体の再生回数はしきい値未満だが、元曲(BUMP)の再生回数は十分あるので、
+    # 上書き設定によりカバー動画がPlaylistに追加されるべきケース
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "Suisei"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [{"title": "少女レイ / 星街すいせい(Cover)", "artist": "Suisei Hoshimachi"}]
+
+    views = {
+        ("少女レイ / 星街すいせい(Cover)", "Suisei Hoshimachi"): ("cover_v1", 100_000),
+        ("少女レイ / 星街すいせい(Cover)", "BUMP OF CHICKEN"): ("orig_v1", 90_000_000),
+    }
+
+    added = []
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: added.append(video_id))
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+    monkeypatch.setattr(gst, "load_score_overrides", lambda: {"少女レイ": "BUMP OF CHICKEN"})
+
+    sent = []
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: sent.append(content))
+
+    gst.run_score(1000, "app", "tok")  # 1000万回再生以上。カバー単体では満たさないがBUMP基準なら満たす
+
+    assert added == ["cover_v1"]  # 追加されるのはあくまでカバー動画自体
+    assert "少女レイ" in "".join(sent)

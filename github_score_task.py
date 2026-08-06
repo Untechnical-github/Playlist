@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 
 import requests
 
@@ -18,6 +20,25 @@ EXCLUDED_TITLE_PREFIX = "Playlist"  # "Playlist"・"Playlist II" 等、集計先
 EXCLUDED_EXACT_TITLES = {"English Songs"}
 VIEW_UNIT = 10_000  # しきい値は「万回再生」単位で指定される
 MAX_MESSAGE_LENGTH = 1900  # Discordのメッセージ本文上限(2000文字)に余裕を持たせる
+
+SCORE_OVERRIDES_FILE = Path("score_overrides.json")
+
+
+def load_score_overrides() -> dict:
+    """カバー曲などで、しきい値判定には元曲のアーティストの再生回数を使いたい場合の上書き設定。
+    曲名にキーの文字列が含まれていたら、そのアーティスト名で検索した再生回数をしきい値判定に使う
+    （実際にPlaylistに追加するのは、あくまで元の曲=カバー動画自体）。
+    """
+    if not SCORE_OVERRIDES_FILE.exists():
+        return {}
+    return json.loads(SCORE_OVERRIDES_FILE.read_text(encoding="utf-8"))
+
+
+def resolve_override_artist(title: str, overrides: dict):
+    for key, override_artist in overrides.items():
+        if key in title:
+            return override_artist
+    return None
 
 
 def _raise_with_body(resp: requests.Response) -> None:
@@ -88,11 +109,21 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
         return
 
     youtube = build_youtube_client()
+    overrides = load_score_overrides()
     view_count_threshold = threshold * VIEW_UNIT
     cache: dict = {}
     matches = []
     for t in all_tracks:
-        video_id, view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
+        # 追加するのは常にこの曲自体（カバー動画等）の video_id
+        video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
+
+        # しきい値の判定だけは、上書き設定があれば元曲アーティストの再生回数を使う
+        override_artist = resolve_override_artist(t["title"], overrides)
+        if override_artist:
+            _, view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
+        else:
+            view_count = own_view_count
+
         if video_id and view_count >= view_count_threshold:
             matches.append((t, video_id, view_count))
 
