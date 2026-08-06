@@ -105,10 +105,16 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
     assert "Old Song" in combined  # 削除された曲として報告される
 
 
-def test_resolve_override_artist_matches_on_title_substring():
+def test_resolve_override_artists_matches_on_title_substring():
+    overrides = {"少女レイ": ["BUMP OF CHICKEN"], "アカシア": ["Pokémon", "映画版"]}
+    assert gst.resolve_override_artists("少女レイ / 星街すいせい(Cover)", overrides) == ["BUMP OF CHICKEN"]
+    assert gst.resolve_override_artists("アカシア - Acacia", overrides) == ["Pokémon", "映画版"]
+    assert gst.resolve_override_artists("全く関係ない曲", overrides) == []
+
+
+def test_resolve_override_artists_accepts_legacy_single_string_value():
     overrides = {"少女レイ": "BUMP OF CHICKEN"}
-    assert gst.resolve_override_artist("少女レイ / 星街すいせい(Cover)", overrides) == "BUMP OF CHICKEN"
-    assert gst.resolve_override_artist("全く関係ない曲", overrides) is None
+    assert gst.resolve_override_artists("少女レイ / 星街すいせい(Cover)", overrides) == ["BUMP OF CHICKEN"]
 
 
 def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monkeypatch):
@@ -135,7 +141,7 @@ def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monk
     monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
     monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: added.append(video_id))
     monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
-    monkeypatch.setattr(gst, "load_score_overrides", lambda: {"少女レイ": "BUMP OF CHICKEN"})
+    monkeypatch.setattr(gst, "load_score_overrides", lambda: {"少女レイ": ["BUMP OF CHICKEN"]})
 
     sent = []
     monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: sent.append(content))
@@ -144,3 +150,37 @@ def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monk
 
     assert added == ["cover_v1"]  # 追加されるのはあくまでカバー動画自体
     assert "少女レイ" in "".join(sent)
+
+
+def test_run_score_qualifies_when_any_override_variant_exceeds_threshold(monkeypatch):
+    # 「アカシア」はBUMP本人の動画としての再生回数はしきい値未満だが、Pokémon公式の
+    # コラボ動画の再生回数がしきい値を超えているため、対象になるべきケース
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "BUMP OF CHICKEN"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [{"title": "アカシア - Acacia", "artist": "BUMP OF CHICKEN"}]
+
+    views = {
+        ("アカシア - Acacia", "BUMP OF CHICKEN"): ("bump_v1", 1_000_000),
+        ("アカシア - Acacia", "Pokémon"): ("poke_v1", 200_000_000),
+    }
+
+    added = []
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: added.append(video_id))
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+    monkeypatch.setattr(gst, "load_score_overrides", lambda: {"アカシア": ["Pokémon"]})
+
+    sent = []
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: sent.append(content))
+
+    gst.run_score(5000, "app", "tok")  # 5000万回再生以上。BUMP単体では満たさないがPokémon版なら満たす
+
+    assert added == ["bump_v1"]  # 追加されるのはあくまでクレジット通りの動画（BUMP版）

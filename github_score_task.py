@@ -25,20 +25,34 @@ SCORE_OVERRIDES_FILE = Path("score_overrides.json")
 
 
 def load_score_overrides() -> dict:
-    """カバー曲などで、しきい値判定には元曲のアーティストの再生回数を使いたい場合の上書き設定。
-    曲名にキーの文字列が含まれていたら、そのアーティスト名で検索した再生回数をしきい値判定に使う
-    （実際にPlaylistに追加するのは、あくまで元の曲=カバー動画自体）。
+    """しきい値判定のときに、この曲自体のクレジットとは別に追加でチェックしたいアーティストの
+    上書き設定。曲名にキーの文字列が含まれていたら、値に列挙されたアーティスト名それぞれで
+    検索した再生回数も候補に加え、（曲自体の再生回数も含めた）最大値をしきい値判定に使う。
+
+    想定するケース:
+    - カバー曲: 曲自体（カバー動画）の再生回数だけでは元曲の人気度を反映しないため、
+      元曲アーティスト名を追加する（例: "少女レイ": ["BUMP OF CHICKEN"]）。
+    - 同じ曲に複数の公式動画/コラボ動画がある: 例えば「アカシア」はBUMP OF CHICKEN本人の
+      動画とは別にPokémon公式のコラボ動画があるため、そちらも追加でチェックする
+      （例: "アカシア": ["Pokémon"]）。どちらか一方でもしきい値を超えていれば対象にする。
+
+    実際にPlaylistに追加するのは、あくまで曲自体（クレジット通り）の video_id。
     """
     if not SCORE_OVERRIDES_FILE.exists():
         return {}
     return json.loads(SCORE_OVERRIDES_FILE.read_text(encoding="utf-8"))
 
 
-def resolve_override_artist(title: str, overrides: dict):
-    for key, override_artist in overrides.items():
+def resolve_override_artists(title: str, overrides: dict) -> list:
+    """曲名にマッチした上書き設定から、追加でチェックすべきアーティスト名の一覧を返す。"""
+    result = []
+    for key, override_artists in overrides.items():
         if key in title:
-            return override_artist
-    return None
+            if isinstance(override_artists, str):
+                result.append(override_artists)
+            else:
+                result.extend(override_artists)
+    return result
 
 
 def _raise_with_body(resp: requests.Response) -> None:
@@ -114,15 +128,15 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     cache: dict = {}
     matches = []
     for t in all_tracks:
-        # 追加するのは常にこの曲自体（カバー動画等）の video_id
+        # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id
         video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
 
-        # しきい値の判定だけは、上書き設定があれば元曲アーティストの再生回数を使う
-        override_artist = resolve_override_artist(t["title"], overrides)
-        if override_artist:
-            _, view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
-        else:
-            view_count = own_view_count
+        # しきい値の判定は、この曲自体に加えて上書き設定の候補アーティストも調べ、最大の
+        # 再生回数を採用する（カバー元やコラボ版など、どれか1つでも超えていればよい）
+        view_count = own_view_count
+        for override_artist in resolve_override_artists(t["title"], overrides):
+            _, alt_view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
+            view_count = max(view_count, alt_view_count)
 
         if video_id and view_count >= view_count_threshold:
             matches.append((t, video_id, view_count))
