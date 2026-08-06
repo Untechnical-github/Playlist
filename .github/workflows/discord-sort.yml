@@ -26,10 +26,20 @@ jobs:
           OAUTH_TOKEN_JSON: ${{ secrets.OAUTH_TOKEN_JSON }}
           OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
 
-      - name: Run task
+      - name: Run sort task
+        if: github.event.client_payload.mode != 'score'
         run: python github_task.py
         env:
           TASK_MODE: ${{ github.event.client_payload.mode }}
           PLAYLIST_ID: ${{ github.event.client_payload.playlist_id }}
           APPLICATION_ID: ${{ github.event.client_payload.application_id }}
           INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}
+
+      - name: Run score task
+        if: github.event.client_payload.mode == 'score'
+        run: python github_score_task.py
+        env:
+          PLAYLIST_ID: ${{ github.event.client_payload.playlist_id }}
+          APPLICATION_ID: ${{ github.event.client_payload.application_id }}
+          INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}

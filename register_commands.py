@@ -18,7 +18,20 @@ COMMANDS = [
                 "autocomplete": True,
             }
         ],
-    }
+    },
+    {
+        "name": "score",
+        "description": "プレイリストの曲をYouTube再生回数でスコアリングする",
+        "options": [
+            {
+                "type": 3,
+                "name": "playlist",
+                "description": "対象のプレイリスト",
+                "required": True,
+                "autocomplete": True,
+            }
+        ],
+    },
 ]
 
 

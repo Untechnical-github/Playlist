@@ -99,9 +99,11 @@ async function handleCommand(interaction, env, ctx) {
     return json({ type: 4, data: { content: "プレイリストが指定されていません。" } });
   }
 
+  const mode = interaction.data.name === "score" ? "score" : "preview";
+
   ctx.waitUntil(
     triggerGithubAction(env, {
-      mode: "preview",
+      mode,
       playlist_id: playlistId.value,
       application_id: interaction.application_id,
       interaction_token: interaction.token,
