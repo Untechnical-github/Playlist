@@ -9,11 +9,7 @@ class TrackScore:
     artist: str
     video_id: Optional[str]
     view_count: int
-    spotify_id: Optional[str]
-    popularity: int
-    youtube_score: float
-    spotify_score: float
-    composite_score: float
+    score: float
 
 
 def normalize_view_counts(view_counts: List[int]) -> List[float]:
@@ -29,15 +25,3 @@ def normalize_view_counts(view_counts: List[int]) -> List[float]:
     if hi == lo:
         return [1.0 if hi > 0 else 0.0 for _ in logs]
     return [(x - lo) / (hi - lo) for x in logs]
-
-
-def normalize_popularity(popularity: int) -> float:
-    """Spotifyのpopularityは元々0-100のスコアなので、そのまま0-1にスケールするだけでよい。"""
-    return max(0, min(popularity, 100)) / 100.0
-
-
-def composite_score(youtube_score: float, spotify_score: float, youtube_weight: float, spotify_weight: float) -> float:
-    total_weight = youtube_weight + spotify_weight
-    if total_weight <= 0:
-        return 0.0
-    return (youtube_weight * youtube_score + spotify_weight * spotify_score) / total_weight
