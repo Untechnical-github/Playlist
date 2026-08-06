@@ -121,93 +121,32 @@ def _auto_merge_transliterations(tracks: List[Track], alias_map: Dict[str, str])
 
 def _assign_buckets(tracks: List[Track], alias_map: Dict[str, str]) -> List[Optional[str]]:
     """曲ごとに所属させるアーティストのバケツ（正規化済みアーティスト名、またはエイリアス先の
-    代表グループ名）を決める。
-    - アーティストが1人だけで明確な曲でも、同じバケツの曲が他に無い（実質単独タグの）
-      場合は、隣接している曲のバケツにそのまま所属できる（＝手動で特定アーティストの隣に
-      置いた位置を尊重する）。一方、同じバケツの曲が他にもあるなら、位置に関係なく
-      常にそのバケツで確定する（本物の複数曲アーティストを位置で分断させないため）。
-    - コラボ曲は、現在隣接している曲のバケツが自分のアーティストのいずれかと一致すればそこに所属。
-      一致しなければ先頭アーティストで確定。
-    - アーティスト情報が無い曲（UGC等）は、隣接している曲のバケツにそのまま所属する。
-    - 隣接曲からも所属が決まらなかった曲は、単独タグ・コラボ曲なら自分のタグ（の先頭）で確定、
-      完全に不明な曲は None（＝末尾送りの「不明」扱い）のまま。
+    代表グループ名）を決める。位置（隣にどの曲があるか）は一切見ない。
+    - 掲載されているアーティスト（コラボなら複数）のいずれかが、プレイリスト全体で本当に
+      2曲以上ある（本物の複数曲アーティスト）なら、そのバケツに所属する。
+    - 該当が無ければ、掲載アーティストの先頭（コラボなら1人目）のタグをそのままバケツとする
+      （この場合は当然「単独曲」として扱われ、末尾行きになる）。
+    - アーティスト情報が全く無い曲（UGC等）はバケツを持たない（None、末尾送り）。
     """
-    n = len(tracks)
-    buckets: List[Optional[str]] = [None] * n
-
-    # 「本当に複数曲あるか」は、単独タグの曲だけでなくコラボ曲での登場も含めて数える。
-    # コラボ曲でしか登場しないアーティスト（例: 別名義の曲が多いキャラクター名義など）も
-    # 正しく「複数曲アーティスト」として認識できるようにするため。
     tag_counts: Dict[str, int] = {}
     for t in tracks:
         for a in t.artists:
             key = _canon(a, alias_map)
             tag_counts[key] = tag_counts.get(key, 0) + 1
 
-    single_idx: List[int] = []
-    ambiguous_idx: List[int] = []
-    unknown_idx: List[int] = []
-
+    buckets: List[Optional[str]] = [None] * len(tracks)
     for i, t in enumerate(tracks):
-        if len(t.artists) == 1 and not t.is_unknown:
-            key = _canon(t.artists[0], alias_map)
-            if tag_counts[key] >= 2:
-                buckets[i] = key
-            else:
-                single_idx.append(i)
-        elif t.artists:
-            # コラボ曲でも、掲載アーティストのいずれかが既に本物の複数曲アーティストなら
-            # 位置に関係なく即座にそちらへ確定する（単独タグの曲と同じ優先度）。
-            matched = next(
-                (
-                    _canon(a, alias_map)
-                    for a in t.artists
-                    if tag_counts.get(_canon(a, alias_map), 0) >= 2
-                ),
-                None,
-            )
-            if matched is not None:
-                buckets[i] = matched
-            else:
-                ambiguous_idx.append(i)
-        else:
-            unknown_idx.append(i)
-
-    changed = True
-    while changed:
-        changed = False
-        for i in ambiguous_idx:
-            if buckets[i] is not None:
-                continue
-            keys = {_canon(a, alias_map) for a in tracks[i].artists}
-            for j in (i - 1, i + 1):
-                if 0 <= j < n and buckets[j] in keys:
-                    buckets[i] = buckets[j]
-                    changed = True
-                    break
-        for i in single_idx:
-            if buckets[i] is not None:
-                continue
-            for j in (i - 1, i + 1):
-                if 0 <= j < n and buckets[j] is not None:
-                    buckets[i] = buckets[j]
-                    changed = True
-                    break
-        for i in unknown_idx:
-            if buckets[i] is not None:
-                continue
-            for j in (i - 1, i + 1):
-                if 0 <= j < n and buckets[j] is not None:
-                    buckets[i] = buckets[j]
-                    changed = True
-                    break
-
-    for i in ambiguous_idx:
-        if buckets[i] is None:
-            buckets[i] = _canon(tracks[i].artists[0], alias_map)
-    for i in single_idx:
-        if buckets[i] is None:
-            buckets[i] = _canon(tracks[i].artists[0], alias_map)
+        if t.is_unknown:
+            continue
+        matched = next(
+            (
+                _canon(a, alias_map)
+                for a in t.artists
+                if tag_counts.get(_canon(a, alias_map), 0) >= 2
+            ),
+            None,
+        )
+        buckets[i] = matched if matched is not None else _canon(t.artists[0], alias_map)
 
     return buckets
 
