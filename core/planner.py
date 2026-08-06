@@ -60,21 +60,22 @@ def _auto_merge_similar_names(tracks: List[Track], alias_map: Dict[str, str]) ->
     return {k: find(k) for k in candidates if find(k) != k}
 
 
-def _is_katakana_only(text: str) -> bool:
-    """カタカナ（と長音符・中点・空白・半角/全角の区別を無視した英数字）だけで構成されているか。
+def _is_kana_only(text: str) -> bool:
+    """ひらがな・カタカナ（と長音符・中点・空白・半角/全角の区別を無視した英数字）だけで
+    構成されているか。かな文字は読みが一意に決まるため変換対象にできる。
     漢字が混じっている場合は False（人名の読みは辞書変換だけでは正しく求められないため対象外）。
     """
-    has_katakana = False
+    has_kana = False
     for ch in text:
-        if "゠" <= ch <= "ヿ":
-            has_katakana = True
+        if ("゠" <= ch <= "ヿ") or ("ぁ" <= ch <= "ゟ"):
+            has_kana = True
             continue
         if ch.isspace() or ch in "・-ー.":
             continue
         if ch.isascii():
             continue
         return False
-    return has_katakana
+    return has_kana
 
 
 def _to_romaji(text: str) -> str:
@@ -89,9 +90,9 @@ def _to_romaji(text: str) -> str:
 
 
 def _auto_merge_transliterations(tracks: List[Track], alias_map: Dict[str, str]) -> Dict[str, str]:
-    """"ヨルシカ"（カタカナ）と "Yorushika"（ローマ字）のような、カタカナ表記とその
-    ローマ字表記を自動で同一アーティストとして統合する。漢字を含む表記は読みが一意に
-    決まらないため対象外。artist_groups.json で明示的に定義済みのキーも対象外。
+    """"ヨルシカ"（カタカナ）や "なとり"（ひらがな）と "Yorushika"/"natori"（ローマ字）のような、
+    かな表記とそのローマ字表記を自動で同一アーティストとして統合する。漢字を含む表記は読みが
+    一意に決まらないため対象外。artist_groups.json で明示的に定義済みのキーも対象外。
     """
     raw_by_norm: Dict[str, str] = {}
     for t in tracks:
@@ -104,7 +105,7 @@ def _auto_merge_transliterations(tracks: List[Track], alias_map: Dict[str, str])
 
     groups: Dict[str, List[str]] = {}
     for norm_key, raw in candidates.items():
-        romaji_key = _to_romaji(raw) if _is_katakana_only(raw) else norm_key
+        romaji_key = _to_romaji(raw) if _is_kana_only(raw) else norm_key
         groups.setdefault(romaji_key, []).append(norm_key)
 
     merges: Dict[str, str] = {}

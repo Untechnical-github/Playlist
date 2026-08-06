@@ -8,7 +8,7 @@ from core.models import Track
 from core.planner import (
     _auto_merge_similar_names,
     _auto_merge_transliterations,
-    _is_katakana_only,
+    _is_kana_only,
     build_plan,
     group_tracks,
 )
@@ -149,6 +149,16 @@ def test_katakana_and_romaji_spelling_of_same_artist_are_merged_automatically():
     assert grouped.tail == []
 
 
+def test_hiragana_and_romaji_spelling_of_same_artist_are_merged_automatically():
+    tracks = [t("1", ["natori"]), t("2", ["なとり"])]
+    grouped = group_tracks(tracks)
+    assert len(grouped.blocks) == 1
+    name, block_tracks = grouped.blocks[0]
+    assert name in ("natori", "なとり")
+    assert [x.video_id for x in block_tracks] == ["1", "2"]
+    assert grouped.tail == []
+
+
 def test_kanji_names_are_not_auto_merged_by_transliteration():
     # 漢字の読みは辞書変換だけでは一意に決まらないため、対象外（誤爆防止）
     tracks = [t("1", ["米津玄師"]), t("2", ["Kenshi Yonezu"])]
@@ -156,12 +166,13 @@ def test_kanji_names_are_not_auto_merged_by_transliteration():
     assert merges == {}
 
 
-def test_is_katakana_only():
-    assert _is_katakana_only("ヨルシカ") is True
-    assert _is_katakana_only("ヨルシカ・") is True
-    assert _is_katakana_only("かぐや") is False
-    assert _is_katakana_only("米津玄師") is False
-    assert _is_katakana_only("Yorushika") is False
+def test_is_kana_only():
+    assert _is_kana_only("ヨルシカ") is True
+    assert _is_kana_only("ヨルシカ・") is True
+    assert _is_kana_only("なとり") is True
+    assert _is_kana_only("かぐや") is True
+    assert _is_kana_only("米津玄師") is False
+    assert _is_kana_only("Yorushika") is False
 
 
 def test_artist_group_alias_merges_unrelated_tags_into_one_block():
