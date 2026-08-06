@@ -3,12 +3,19 @@ import os
 import requests
 
 from core.auth import get_auth_header
-from core.youtube_api import add_playlist_item, list_my_playlists, list_playlist_items
+from core.youtube_api import (
+    add_playlist_item,
+    list_my_playlists,
+    list_playlist_items,
+    remove_playlist_item,
+)
 from score_playlist import build_youtube_client, fetch_playlist_tracks, get_youtube_view_count
 
 DISCORD_API = "https://discord.com/api/v10"
 
 TARGET_PLAYLIST_NAME = "Playlist"
+EXCLUDED_TITLE_PREFIX = "Playlist"  # "Playlist"・"Playlist II" 等、集計先とその仲間は対象外
+EXCLUDED_EXACT_TITLES = {"English Songs"}
 VIEW_UNIT = 10_000  # しきい値は「万回再生」単位で指定される
 MAX_MESSAGE_LENGTH = 1900  # Discordのメッセージ本文上限(2000文字)に余裕を持たせる
 
@@ -52,23 +59,43 @@ def find_playlist_id_by_title(auth_header: str, title: str):
     return None
 
 
-def run_score(playlist_id: str, threshold: int, application_id: str, interaction_token: str) -> None:
-    youtube = build_youtube_client()
-    tracks = fetch_playlist_tracks(playlist_id)
+def get_source_playlists(auth_header: str) -> list:
+    """集計対象のプレイリスト一覧を返す。「Playlist」で始まる名前（集計先とその仲間）と
+    「English Songs」は対象外にする。
+    """
+    return [
+        p
+        for p in list_my_playlists(auth_header)
+        if not p["snippet"]["title"].startswith(EXCLUDED_TITLE_PREFIX)
+        and p["snippet"]["title"] not in EXCLUDED_EXACT_TITLES
+    ]
 
-    if not tracks:
+
+def run_score(threshold: int, application_id: str, interaction_token: str) -> None:
+    auth_header = get_auth_header()
+
+    source_playlists = get_source_playlists(auth_header)
+    if not source_playlists:
+        post_followup(application_id, interaction_token, "集計対象になるプレイリストがありませんでした。")
+        return
+
+    all_tracks = []
+    for p in source_playlists:
+        all_tracks.extend(fetch_playlist_tracks(p["id"]))
+
+    if not all_tracks:
         post_followup(application_id, interaction_token, "曲がありませんでした。")
         return
 
+    youtube = build_youtube_client()
     view_count_threshold = threshold * VIEW_UNIT
     cache: dict = {}
     matches = []
-    for t in tracks:
+    for t in all_tracks:
         video_id, view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
         if video_id and view_count >= view_count_threshold:
             matches.append((t, video_id, view_count))
 
-    auth_header = get_auth_header()
     target_playlist_id = find_playlist_id_by_title(auth_header, TARGET_PLAYLIST_NAME)
     if target_playlist_id is None:
         post_followup(
@@ -78,43 +105,51 @@ def run_score(playlist_id: str, threshold: int, application_id: str, interaction
         )
         return
 
-    existing_video_ids = {
-        it["contentDetails"]["videoId"] for it in list_playlist_items(auth_header, target_playlist_id)
-    }
+    # 削除判定のため、追加・削除どちらも行う前の「今の Playlist の中身」を確定させておく
+    original_items = list_playlist_items(auth_header, target_playlist_id)
+    original_by_video_id = {it["contentDetails"]["videoId"]: it for it in original_items}
+    qualifying_video_ids = {video_id for _, video_id, _ in matches}
 
     newly_added = []
     for t, video_id, view_count in matches:
-        if video_id in existing_video_ids:
+        if video_id in original_by_video_id:
             continue
         add_playlist_item(auth_header, target_playlist_id, video_id)
-        existing_video_ids.add(video_id)
         newly_added.append((t, view_count))
 
-    if not newly_added:
+    removed = []
+    for video_id, item in original_by_video_id.items():
+        if video_id in qualifying_video_ids:
+            continue
+        remove_playlist_item(auth_header, item["id"])
+        removed.append(item["snippet"].get("title", video_id))
+
+    if not newly_added and not removed:
         post_followup(
             application_id,
             interaction_token,
-            f"しきい値（{threshold}万回再生以上）を満たす新しい曲はありませんでした"
-            f"（対象{len(matches)}曲は既に追加済みです）。",
+            f"変更はありませんでした（しきい値: {threshold}万回再生以上、"
+            f"集計対象プレイリスト{len(source_playlists)}件、対象{len(matches)}曲）。",
         )
         return
 
     header = (
-        f"**「{TARGET_PLAYLIST_NAME}」に{len(newly_added)}曲を新規追加しました**"
-        f"（しきい値: {threshold}万回再生以上）\n"
+        f"**「{TARGET_PLAYLIST_NAME}」を更新しました**"
+        f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
+        f"追加{len(newly_added)}曲・削除{len(removed)}曲）\n"
     )
-    lines = [f"・{t['title']} - {t['artist']}（views: {view_count:,}）" for t, view_count in newly_added]
+    lines = [f"・追加: {t['title']} - {t['artist']}（views: {view_count:,}）" for t, view_count in newly_added]
+    lines += [f"・削除: {title}（しきい値未満になったため）" for title in removed]
     send_paginated_message(application_id, interaction_token, header, lines)
 
 
 def main() -> None:
-    playlist_id = os.environ["PLAYLIST_ID"]
     threshold = int(os.environ["THRESHOLD"])
     application_id = os.environ["APPLICATION_ID"]
     interaction_token = os.environ["INTERACTION_TOKEN"]
 
     try:
-        run_score(playlist_id, threshold, application_id, interaction_token)
+        run_score(threshold, application_id, interaction_token)
     except Exception as e:
         try:
             post_followup(application_id, interaction_token, f"エラーが発生しました: {e}")

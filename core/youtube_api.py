@@ -87,6 +87,16 @@ def add_playlist_item(auth_header: str, playlist_id: str, video_id: str) -> None
     resp.raise_for_status()
 
 
+def remove_playlist_item(auth_header: str, item_id: str) -> None:
+    """プレイリストから曲を削除する。item_id は videoId ではなく playlistItem 自体の id。"""
+    resp = requests.delete(
+        f"{BASE}/playlistItems",
+        params={"id": item_id},
+        headers={"Authorization": auth_header},
+    )
+    resp.raise_for_status()
+
+
 def set_item_position(
     auth_header: str, playlist_id: str, item_id: str, video_id: str, position: int
 ) -> None:

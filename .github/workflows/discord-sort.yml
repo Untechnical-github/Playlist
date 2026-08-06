@@ -39,7 +39,6 @@ jobs:
         if: github.event.client_payload.mode == 'score'
         run: python github_score_task.py
         env:
-          PLAYLIST_ID: ${{ github.event.client_payload.playlist_id }}
           THRESHOLD: ${{ github.event.client_payload.threshold }}
           APPLICATION_ID: ${{ github.event.client_payload.application_id }}
           INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}

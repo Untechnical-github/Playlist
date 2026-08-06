@@ -21,15 +21,8 @@ COMMANDS = [
     },
     {
         "name": "score",
-        "description": "再生回数がしきい値以上の曲を「Playlist」に追加する",
+        "description": "再生回数がしきい値以上の曲を全プレイリストから集めて「Playlist」に追加する",
         "options": [
-            {
-                "type": 3,
-                "name": "playlist",
-                "description": "対象のプレイリスト",
-                "required": True,
-                "autocomplete": True,
-            },
             {
                 "type": 4,
                 "name": "threshold",

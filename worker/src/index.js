@@ -94,19 +94,28 @@ async function triggerGithubAction(env, payload) {
 }
 
 async function handleCommand(interaction, env, ctx) {
+  if (interaction.data.name === "score") {
+    const thresholdOpt = (interaction.data.options || []).find((o) => o.name === "threshold");
+    ctx.waitUntil(
+      triggerGithubAction(env, {
+        mode: "score",
+        threshold: thresholdOpt ? thresholdOpt.value : null,
+        application_id: interaction.application_id,
+        interaction_token: interaction.token,
+      }).catch(() => {})
+    );
+    return json({ type: 5 });
+  }
+
   const playlistId = (interaction.data.options || []).find((o) => o.name === "playlist");
   if (!playlistId || !playlistId.value) {
     return json({ type: 4, data: { content: "プレイリストが指定されていません。" } });
   }
 
-  const mode = interaction.data.name === "score" ? "score" : "preview";
-  const thresholdOpt = (interaction.data.options || []).find((o) => o.name === "threshold");
-
   ctx.waitUntil(
     triggerGithubAction(env, {
-      mode,
+      mode: "preview",
       playlist_id: playlistId.value,
-      threshold: thresholdOpt ? thresholdOpt.value : null,
       application_id: interaction.application_id,
       interaction_token: interaction.token,
     }).catch(() => {})
