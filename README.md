@@ -229,3 +229,49 @@ Botを招待したDiscordサーバーで `/sort` と入力し、プレイリス�
 - **プレイリストの並び順設定**: プレイリストの並び順が「カスタム順」以外（例えば「追加順」等）に
   なっていると、公式APIが `position` 指定を拒否する（`manualSortRequired`）。その場合はエラー
   メッセージがDiscordに表示されるので、YouTube Musicアプリで並び順を「カスタム順」に戻せば良い。
+
+## 曲のスコアリング（`score_playlist.py`）
+
+並び替えツールとは独立した別のスクリプト。プレイリストの曲を、YouTube再生回数とSpotifyの
+popularityスコアを基にスコアリングし、人気順にソートしたCSV/JSONを出力する。
+
+### セットアップ
+
+```
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+`.env` を開いて以下を埋める。
+
+- `YOUTUBE_API_KEY`: Google Cloud Consoleで有効化した **YouTube Data API v3** のAPIキー
+  （認証情報 → APIキーを作成。OAuthは不要、キーだけでよい）
+- `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`:
+  [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) でアプリを作成すると発行される
+- `YTMUSIC_AUTH_FILE`: 省略可。ytmusicapiの`browser`認証ファイルのパス（デフォルト
+  `auth/headers_auth.json`）。無ければ認証なし（限定公開/公開プレイリストのみ）で取得を試みる
+
+### 使い方
+
+```
+python score_playlist.py <プレイリストID>
+python score_playlist.py <プレイリストID> --output scores.json
+python score_playlist.py <プレイリストID> --youtube-weight 0.7 --spotify-weight 0.3
+```
+
+### 設計メモ
+
+- **同じ曲を何度も検索しない**: 曲名・アーティスト名の組み合わせごとにキャッシュし、YouTube/Spotify
+  それぞれ1回しか検索しない。
+- **見つからなかった曲はスコア0**: YouTube/Spotifyでヒットしなかった曲は`view_count`/`popularity`が
+  0になり、ログに「no match」として出力される。出力結果でも`video_id`/`spotify_id`が空欄になる。
+- **再生回数の正規化はlogスケール**: 再生回数は桁違いに差が出る（例:
+  1,000回とその1,000倍の1,000,000回のように、素の値でmin-max正規化すると最上位の1曲以外が
+  ほぼ0点になってしまう）ため、`log(views + 1)`を取ってからmin-max正規化する
+  （`scoring.py` の `normalize_view_counts`）。Spotifyのpopularityは元々0-100の指標なので、
+  単純に100で割るだけでよい。
+- **リトライ**: YouTube/Spotify両方のAPI呼び出しに、失敗のたびに待ち時間を伸ばす簡易リトライ
+  （最大3回）を入れている。それでも失敗した場合はその曲を「見つからなかった」扱いにする。
+- **YouTube Data API v3のクォータに注意**: `search.list`は1回100ユニット消費し、デフォルトの
+  1日あたり10,000ユニット枠では**1日あたり約100曲分**が上限の目安になる。大きいプレイリストは
+  複数日に分けるか、Google Cloud Consoleでクォータ引き上げを申請する必要がある。
