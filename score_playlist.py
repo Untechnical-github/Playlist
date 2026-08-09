@@ -44,10 +44,18 @@ def _throttle_search_calls() -> None:
     _last_search_call_time = time.monotonic()
 
 
+def _is_daily_quota_exceeded(e: Exception) -> bool:
+    """「Search Queries per minute」等は待てば回復するが、「...per day」の1日あたりクォータ超過は
+    リセット（太平洋時間の深夜）まで絶対に回復しないため、区別してリトライを打ち切る。
+    """
+    return isinstance(e, HttpError) and e.resp is not None and e.resp.status == 429 and "per day" in str(e)
+
+
 def retry(func, *args, **kwargs):
     """簡易リトライ：失敗するたびに待ち時間を伸ばしながら再試行し、それでも失敗したら例外を送出する。
     「Search Queries per minute」のようなレート制限（429）は数秒の待機では解消しないことが多いため、
-    通常のAPIエラーより長めに待ってから再試行する。
+    通常のAPIエラーより長めに待ってから再試行する。1日あたりのクォータ超過はいくら待っても
+    回復しないため、即座に諦める（無駄な待機・API呼び出しを避けるため）。
     """
     last_error: Optional[Exception] = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -55,6 +63,9 @@ def retry(func, *args, **kwargs):
             return func(*args, **kwargs)
         except Exception as e:  # noqa: BLE001 - 呼び出し先のAPIエラーは種類を問わずリトライ対象にする
             last_error = e
+            if _is_daily_quota_exceeded(e):
+                logger.warning("Daily quota exceeded (%s); giving up without retrying", e)
+                break
             if attempt == MAX_RETRIES:
                 break
             if isinstance(e, HttpError) and e.resp is not None and e.resp.status == 429:
@@ -170,8 +181,11 @@ def get_youtube_view_count(
                 stats_items = stats_resp.get("items", [])
                 view_count = int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
         except HttpError as e:
+            # APIエラー（クォータ超過等）は「見つからなかった」とは区別し、キャッシュには書き込まない。
+            # ここで(None, 0)を保存してしまうと、恒久キャッシュの下では次回以降も再取得されず、
+            # 一時的な障害のせいでその曲が永久に対象外扱いになってしまう。
             logger.warning('YouTube API error for "%s": %s', query, e)
-            video_id, view_count = None, 0
+            return previous if previous is not None else (None, 0)
 
     if previous is not None and view_count < previous[1]:
         logger.info(

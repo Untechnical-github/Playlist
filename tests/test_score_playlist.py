@@ -15,8 +15,16 @@ class _FakeResp:
         self.reason = "error"
 
 
-def _http_error(status):
-    return HttpError(_FakeResp(status), b"error body")
+def _http_error(status, content: bytes = b"error body"):
+    return HttpError(_FakeResp(status), content)
+
+
+def _daily_quota_error():
+    return _http_error(
+        429,
+        b"Quota exceeded for quota metric 'Search Queries' and limit 'Search Queries per day' "
+        b"of service 'youtube.googleapis.com'",
+    )
 
 
 class _FakeYouTube:
@@ -97,6 +105,22 @@ def test_retry_waits_longer_on_rate_limit_than_on_other_errors(monkeypatch):
         pass
 
     assert all(w < sp.RATE_LIMIT_BACKOFF_SECONDS for w in waits)
+
+
+def test_retry_gives_up_immediately_on_daily_quota_exceeded_without_sleeping(monkeypatch):
+    monkeypatch.setattr(sp.time, "sleep", lambda seconds: (_ for _ in ()).throw(AssertionError("must not sleep")))
+    calls = {"n": 0}
+
+    def always_daily_quota_exceeded():
+        calls["n"] += 1
+        raise _daily_quota_error()
+
+    try:
+        sp.retry(always_daily_quota_exceeded)
+    except HttpError:
+        pass
+
+    assert calls["n"] == 1  # 1日あたりのクォータ超過は待っても回復しないためリトライしない
 
 
 def test_throttle_search_calls_sleeps_to_maintain_minimum_interval(monkeypatch):
@@ -205,3 +229,69 @@ def test_get_youtube_view_count_force_refresh_keeps_cached_value_when_view_count
     assert result == ("v1", 1_000)  # 古い（大きい）値を維持
     assert cache[("Song A", "Artist A")] == ("v1", 1_000)
     assert fetched_at[("Song A", "Artist A")] == 123.0  # 更新しなかったので取得日時もそのまま
+
+
+class _SearchFailsYouTube:
+    """search.list().execute() が常にHttpErrorを送出するフェイク（クォータ超過等を想定）。"""
+
+    def __init__(self, error):
+        self._error = error
+
+    def search(self):
+        outer = self
+
+        class _List:
+            def list(self, **kwargs):
+                class _Exec:
+                    def execute(self_inner):
+                        raise outer._error
+
+                return _Exec()
+
+        return _List()
+
+
+class _VideosFailsYouTube:
+    """videos.list().execute()（統計のみ再取得）が常にHttpErrorを送出するフェイク。"""
+
+    def __init__(self, error):
+        self._error = error
+
+    def videos(self):
+        outer = self
+
+        class _List:
+            def list(self, **kwargs):
+                class _Exec:
+                    def execute(self_inner):
+                        raise outer._error
+
+                return _Exec()
+
+        return _List()
+
+
+def test_get_youtube_view_count_does_not_poison_cache_on_api_error_with_no_previous_value(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _SearchFailsYouTube(_daily_quota_error())
+    cache = {}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(youtube, "Vaundy 不可幸力", "Vaundy", cache, fetched_at)
+
+    assert result == (None, 0)
+    assert cache == {}  # 一時的なAPIエラーを「見つからなかった」としてキャッシュに固定しない
+    assert fetched_at == {}
+
+
+def test_get_youtube_view_count_returns_previous_on_api_error_without_touching_cache(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _VideosFailsYouTube(_daily_quota_error())
+    cache = {("Song A", "Artist A"): ("v1", 1_000)}
+    fetched_at = {("Song A", "Artist A"): 123.0}
+
+    result = sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at, force_refresh=True)
+
+    assert result == ("v1", 1_000)
+    assert cache[("Song A", "Artist A")] == ("v1", 1_000)
+    assert fetched_at[("Song A", "Artist A")] == 123.0

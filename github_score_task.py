@@ -165,8 +165,12 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
 
             if video_id and view_count >= view_count_threshold:
                 matches.append((t, video_id, view_count))
+
+            # 曲数が多いと検索だけで長時間かかり、クォータ超過やジョブのキャンセル・タイムアウトで
+            # 途中終了することもある。1曲ごとに保存しておけば、そこまで調べた分は必ず次回に持ち越せる
+            # （finallyでの保存だけだと、プロセスが強制終了された場合に未保存のまま失われる）
+            save_view_cache(cache, fetched_at)
     finally:
-        # 曲数が多いと検索だけで長時間かかるため、途中で失敗しても調べ終えた分は次回に持ち越す
         save_view_cache(cache, fetched_at)
 
     target_playlist_id = find_playlist_id_by_title(auth_header, TARGET_PLAYLIST_NAME)
