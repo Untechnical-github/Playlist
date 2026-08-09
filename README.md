@@ -271,11 +271,23 @@ python score_playlist.py <プレイリストID> --output scores.json
   1,000回とその1,000倍の1,000,000回のように、素の値でmin-max正規化すると最上位の1曲以外が
   ほぼ0点になってしまう）ため、`log(views + 1)`を取ってからmin-max正規化する
   （`scoring.py` の `normalize_view_counts`）。
-- **リトライ**: API呼び出しに、失敗のたびに待ち時間を伸ばす簡易リトライ（最大3回）を入れている。
+- **リトライ**: API呼び出しに、失敗のたびに待ち時間を伸ばす簡易リトライ（最大5回）を入れている。
   それでも失敗した場合はその曲を「見つからなかった」扱いにする。
+- **`search.list`のペース制限**: YouTube Data API v3は「1分あたりの検索回数」が厳しく、
+  何百曲もの`search.list`を間隔を空けずに連続で呼ぶと`429 rateLimitExceeded`
+  （"Search Queries per minute"）が続けて発生し、実行がほぼ進まなくなることがある。これを防ぐため
+  `MIN_SEARCH_INTERVAL_SECONDS`（既定1.5秒、`YOUTUBE_SEARCH_MIN_INTERVAL`環境変数で調整可）だけ
+  呼び出し間隔を空けてから検索する。それでも429になった場合はリトライの待ち時間を通常より長く
+  （既定30秒、`RATE_LIMIT_BACKOFF_SECONDS`）取る。
+- **検索結果のディスクキャッシュ（`youtube_view_cache.json`）**: 曲名・アーティスト名の組み合わせ
+  ごとに`video_id`・再生回数を実行間で永続化する（既定7日間有効、`CACHE_TTL_SECONDS`）。
+  対象プレイリストの曲数が多いほど`search.list`の呼び出し数が多くなり時間もクォータも消費するため、
+  一度調べた曲は次回以降キャッシュから再利用し、期限切れ分だけ再取得する。gitignore対象。
+  Discordの`/score`（GitHub Actions経由）でも`actions/cache`でこのファイルをジョブ間で保持している。
 - **YouTube Data API v3のクォータに注意**: `search.list`は1回100ユニット消費し、デフォルトの
   1日あたり10,000ユニット枠では**1日あたり約100曲分**が上限の目安になる。大きいプレイリストは
-  複数日に分けるか、Google Cloud Consoleでクォータ引き上げを申請する必要がある。
+  複数日に分けるか、Google Cloud Consoleでクォータ引き上げを申請する必要がある（ディスクキャッシュに
+  より2回目以降の実行は新規・期限切れ分の曲だけで済むため、実際の消費はかなり減る）。
 
 ### Discordの`/score`コマンド
 

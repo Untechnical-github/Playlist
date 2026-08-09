@@ -11,7 +11,13 @@ from core.youtube_api import (
     list_playlist_items,
     remove_playlist_item,
 )
-from score_playlist import build_youtube_client, fetch_playlist_tracks, get_youtube_view_count
+from score_playlist import (
+    build_youtube_client,
+    fetch_playlist_tracks,
+    get_youtube_view_count,
+    load_view_cache,
+    save_view_cache,
+)
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -125,21 +131,25 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     youtube = build_youtube_client()
     overrides = load_score_overrides()
     view_count_threshold = threshold * VIEW_UNIT
-    cache: dict = {}
+    cache, fetched_at = load_view_cache()
     matches = []
-    for t in all_tracks:
-        # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id
-        video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
+    try:
+        for t in all_tracks:
+            # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id
+            video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
 
-        # しきい値の判定は、この曲自体に加えて上書き設定の候補アーティストも調べ、最大の
-        # 再生回数を採用する（カバー元やコラボ版など、どれか1つでも超えていればよい）
-        view_count = own_view_count
-        for override_artist in resolve_override_artists(t["title"], overrides):
-            _, alt_view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
-            view_count = max(view_count, alt_view_count)
+            # しきい値の判定は、この曲自体に加えて上書き設定の候補アーティストも調べ、最大の
+            # 再生回数を採用する（カバー元やコラボ版など、どれか1つでも超えていればよい）
+            view_count = own_view_count
+            for override_artist in resolve_override_artists(t["title"], overrides):
+                _, alt_view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
+                view_count = max(view_count, alt_view_count)
 
-        if video_id and view_count >= view_count_threshold:
-            matches.append((t, video_id, view_count))
+            if video_id and view_count >= view_count_threshold:
+                matches.append((t, video_id, view_count))
+    finally:
+        # 曲数が多いと検索だけで長時間かかるため、途中で失敗しても調べ終えた分は次回に持ち越す
+        save_view_cache(cache, fetched_at)
 
     target_playlist_id = find_playlist_id_by_title(auth_header, TARGET_PLAYLIST_NAME)
     if target_playlist_id is None:

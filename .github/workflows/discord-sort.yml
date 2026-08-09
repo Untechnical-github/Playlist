@@ -35,6 +35,15 @@ jobs:
           APPLICATION_ID: ${{ github.event.client_payload.application_id }}
           INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}
 
+      - name: Restore YouTube view count cache
+        if: github.event.client_payload.mode == 'score'
+        uses: actions/cache@v4
+        with:
+          path: youtube_view_cache.json
+          key: youtube-view-cache-${{ github.run_id }}
+          restore-keys: |
+            youtube-view-cache-
+
       - name: Run score task
         if: github.event.client_payload.mode == 'score'
         run: python github_score_task.py

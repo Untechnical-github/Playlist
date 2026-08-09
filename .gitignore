@@ -9,3 +9,4 @@ worker/node_modules/
 .env
 scores.csv
 scores.json
+youtube_view_cache.json

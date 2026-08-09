@@ -76,6 +76,8 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", fake_fetch_playlist_tracks)
     monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
     monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
     monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
     monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
@@ -135,6 +137,8 @@ def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monk
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
     monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
     monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
     monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
     monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
@@ -170,6 +174,8 @@ def test_run_score_qualifies_when_any_override_variant_exceeds_threshold(monkeyp
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
     monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
     monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
     monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
     monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
