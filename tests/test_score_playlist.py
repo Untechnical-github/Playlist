@@ -19,6 +19,45 @@ def _http_error(status):
     return HttpError(_FakeResp(status), b"error body")
 
 
+class _FakeYouTube:
+    """search().list().execute() / videos().list().execute() の連鎖を模倣するフェイク。
+    view_countsに渡した値を呼び出しごとに1つずつ順番に返す（常に1件ヒットする想定）。
+    """
+
+    def __init__(self, view_counts, video_id="vid"):
+        self._view_counts = list(view_counts)
+        self._video_id = video_id
+        self.search_call_count = 0
+
+    def search(self):
+        outer = self
+
+        class _List:
+            def list(self, **kwargs):
+                class _Exec:
+                    def execute(self_inner):
+                        outer.search_call_count += 1
+                        return {"items": [{"id": {"videoId": outer._video_id}}]}
+
+                return _Exec()
+
+        return _List()
+
+    def videos(self):
+        outer = self
+
+        class _List:
+            def list(self, **kwargs):
+                class _Exec:
+                    def execute(self_inner):
+                        view_count = outer._view_counts.pop(0)
+                        return {"items": [{"statistics": {"viewCount": str(view_count)}}]}
+
+                return _Exec()
+
+        return _List()
+
+
 def test_retry_returns_result_once_underlying_call_succeeds(monkeypatch):
     monkeypatch.setattr(sp.time, "sleep", lambda seconds: None)
     calls = {"n": 0}
@@ -83,15 +122,15 @@ def test_view_cache_round_trip_preserves_entries(tmp_path):
     assert ("Song A", "Artist A") in loaded_fetched_at
 
 
-def test_view_cache_drops_entries_older_than_ttl(tmp_path):
+def test_view_cache_keeps_very_old_entries_since_cache_has_no_ttl(tmp_path):
     path = str(tmp_path / "cache.json")
     cache = {("Old Song", "Old Artist"): ("v_old", 999)}
-    stale_fetched_at = {("Old Song", "Old Artist"): time.time() - sp.CACHE_TTL_SECONDS - 3600}
+    old_fetched_at = {("Old Song", "Old Artist"): time.time() - 365 * 24 * 3600}
 
-    sp.save_view_cache(cache, stale_fetched_at, path=path)
+    sp.save_view_cache(cache, old_fetched_at, path=path)
     loaded_cache, _ = sp.load_view_cache(path=path)
 
-    assert loaded_cache == {}
+    assert loaded_cache == cache
 
 
 def test_view_cache_keeps_original_fetched_at_for_untouched_entries(tmp_path):
@@ -104,3 +143,65 @@ def test_view_cache_keeps_original_fetched_at_for_untouched_entries(tmp_path):
     _, reloaded_fetched_at = sp.load_view_cache(path=path)
 
     assert abs(reloaded_fetched_at[("Song A", "Artist A")] - old_time) < 1e-6
+
+
+def test_get_youtube_view_count_uses_cache_without_calling_api_when_not_forced(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[999_999])  # 呼ばれたら明らかにおかしい値
+    cache = {("Song A", "Artist A"): ("cached_v", 1_000)}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at)
+
+    assert result == ("cached_v", 1_000)
+    assert youtube.search_call_count == 0
+    assert fetched_at == {}  # キャッシュを使っただけなので取得日時は更新されない
+
+
+def test_get_youtube_view_count_force_refresh_updates_when_view_count_increases(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[2_000])
+    cache = {("Song A", "Artist A"): ("v1", 1_000)}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at, force_refresh=True)
+
+    assert result == ("v1", 2_000)  # video_idは既知なので維持し、統計だけ更新する
+    assert cache[("Song A", "Artist A")] == ("v1", 2_000)
+    assert ("Song A", "Artist A") in fetched_at
+
+
+def test_get_youtube_view_count_force_refresh_with_known_video_id_skips_search(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[3_000])
+    cache = {("Song A", "Artist A"): ("v1", 1_000)}
+    fetched_at = {}
+
+    sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at, force_refresh=True)
+
+    assert youtube.search_call_count == 0  # video_id既知なのでsearch.listはやり直さない
+
+
+def test_get_youtube_view_count_force_refresh_falls_back_to_search_when_video_id_unknown(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[3_000])
+    cache = {("Song A", "Artist A"): (None, 0)}  # 前回はヒットなし
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at, force_refresh=True)
+
+    assert result == ("vid", 3_000)  # video_id不明だったので検索からやり直す
+    assert youtube.search_call_count == 1
+
+
+def test_get_youtube_view_count_force_refresh_keeps_cached_value_when_view_count_decreases(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[500])  # 動画差し替え等による一時的な減少を想定
+    cache = {("Song A", "Artist A"): ("v1", 1_000)}
+    fetched_at = {("Song A", "Artist A"): 123.0}
+
+    result = sp.get_youtube_view_count(youtube, "Song A", "Artist A", cache, fetched_at, force_refresh=True)
+
+    assert result == ("v1", 1_000)  # 古い（大きい）値を維持
+    assert cache[("Song A", "Artist A")] == ("v1", 1_000)
+    assert fetched_at[("Song A", "Artist A")] == 123.0  # 更新しなかったので取得日時もそのまま

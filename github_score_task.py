@@ -27,6 +27,11 @@ EXCLUDED_EXACT_TITLES = {"English Songs"}
 VIEW_UNIT = 10_000  # しきい値は「万回再生」単位で指定される
 MAX_MESSAGE_LENGTH = 1900  # Discordのメッセージ本文上限(2000文字)に余裕を持たせる
 
+# しきい値のこの割合以上・未満（＝境界線付近）の曲だけ、キャッシュに値があっても再取得して
+# 最新の再生回数で判定し直す。再生回数は基本的に増加のみで減らないため、しきい値を大きく
+# 超えている曲や大きく下回っている曲は次回実行までに判定が変わる可能性が低く、再取得は無駄になる。
+BORDERLINE_THRESHOLD_RATIO = 0.8
+
 SCORE_OVERRIDES_FILE = Path("score_overrides.json")
 
 
@@ -135,15 +140,28 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     matches = []
     try:
         for t in all_tracks:
-            # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id
-            video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache)
+            override_artists = resolve_override_artists(t["title"], overrides)
 
-            # しきい値の判定は、この曲自体に加えて上書き設定の候補アーティストも調べ、最大の
-            # 再生回数を採用する（カバー元やコラボ版など、どれか1つでも超えていればよい）
-            view_count = own_view_count
-            for override_artist in resolve_override_artists(t["title"], overrides):
-                _, alt_view_count = get_youtube_view_count(youtube, t["title"], override_artist, cache)
-                view_count = max(view_count, alt_view_count)
+            # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id。しきい値の判定は、
+            # この曲自体に加えて上書き設定の候補アーティストも調べ、最大の再生回数を採用する
+            # （カバー元やコラボ版など、どれか1つでも超えていればよい）
+            video_id, own_view_count = get_youtube_view_count(youtube, t["title"], t["artist"], cache, fetched_at)
+            alt_view_counts = [
+                get_youtube_view_count(youtube, t["title"], a, cache, fetched_at)[1] for a in override_artists
+            ]
+            view_count = max([own_view_count] + alt_view_counts)
+
+            # 境界線付近（しきい値未満だがその80%以上）ならキャッシュ済みでも再取得し、
+            # 取得し直した最新の値で判定する
+            if view_count_threshold * BORDERLINE_THRESHOLD_RATIO <= view_count < view_count_threshold:
+                video_id, own_view_count = get_youtube_view_count(
+                    youtube, t["title"], t["artist"], cache, fetched_at, force_refresh=True
+                )
+                alt_view_counts = [
+                    get_youtube_view_count(youtube, t["title"], a, cache, fetched_at, force_refresh=True)[1]
+                    for a in override_artists
+                ]
+                view_count = max([own_view_count] + alt_view_counts)
 
             if video_id and view_count >= view_count_threshold:
                 matches.append((t, video_id, view_count))

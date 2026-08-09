@@ -61,7 +61,7 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
         fetched_playlist_ids.append(playlist_id)
         return tracks_by_playlist[playlist_id]
 
-    def fake_get_youtube_view_count(youtube, title, artist, cache):
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
         return views_by_track[(title, artist)]
 
     added = []
@@ -136,7 +136,11 @@ def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monk
     added = []
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
-    monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(
+        gst,
+        "get_youtube_view_count",
+        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: views[(title, artist)],
+    )
     monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
     monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
     monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
@@ -173,7 +177,11 @@ def test_run_score_qualifies_when_any_override_variant_exceeds_threshold(monkeyp
     added = []
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
-    monkeypatch.setattr(gst, "get_youtube_view_count", lambda youtube, title, artist, cache: views[(title, artist)])
+    monkeypatch.setattr(
+        gst,
+        "get_youtube_view_count",
+        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: views[(title, artist)],
+    )
     monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
     monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
     monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
@@ -190,3 +198,89 @@ def test_run_score_qualifies_when_any_override_variant_exceeds_threshold(monkeyp
     gst.run_score(5000, "app", "tok")  # 5000万回再生以上。BUMP単体では満たさないがPokémon版なら満たす
 
     assert added == ["bump_v1"]  # 追加されるのはあくまでクレジット通りの動画（BUMP版）
+
+
+def test_run_score_only_force_refetches_tracks_within_80_percent_of_threshold(monkeypatch):
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "Eve"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [
+        {"title": "Far Below", "artist": "Artist Low"},  # しきい値の50% → 再取得しない
+        {"title": "Borderline", "artist": "Artist Mid"},  # しきい値の90% → 再取得する
+        {"title": "Already Qualifies", "artist": "Artist High"},  # 既にしきい値超え → 再取得しない
+    ]
+
+    initial_views = {
+        ("Far Below", "Artist Low"): ("v_low", 500_000),
+        ("Borderline", "Artist Mid"): ("v_mid", 900_000),
+        ("Already Qualifies", "Artist High"): ("v_high", 5_000_000),
+    }
+
+    force_refresh_calls = []
+
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
+        if force_refresh:
+            force_refresh_calls.append((title, artist))
+            return ("v_mid", 1_500_000)
+        return initial_views[(title, artist)]
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: None)
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: None)
+
+    gst.run_score(100, "app", "tok")  # しきい値1,000,000（境界線は800,000以上1,000,000未満）
+
+    assert force_refresh_calls == [("Borderline", "Artist Mid")]
+
+
+def test_run_score_force_refetches_override_artist_when_combined_view_count_is_borderline(monkeypatch):
+    # カバー動画自体の再生回数だけでは境界線かどうか判断できないため、上書き設定のアーティストと
+    # 合わせた最大値で境界線判定し、境界線ならカバー・元曲どちらも再取得すべきケース
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "Suisei"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [{"title": "少女レイ / 星街すいせい(Cover)", "artist": "Suisei Hoshimachi"}]
+
+    initial_views = {
+        ("少女レイ / 星街すいせい(Cover)", "Suisei Hoshimachi"): ("cover_v1", 100_000),
+        ("少女レイ / 星街すいせい(Cover)", "BUMP OF CHICKEN"): ("orig_v1", 900_000),  # しきい値の90%
+    }
+
+    force_refresh_artists = []
+
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
+        if force_refresh:
+            force_refresh_artists.append(artist)
+            if artist == "BUMP OF CHICKEN":
+                return ("orig_v1", 1_200_000)  # 再取得後はしきい値超え
+        return initial_views[(title, artist)]
+
+    added = []
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: added.append(video_id))
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+    monkeypatch.setattr(gst, "load_score_overrides", lambda: {"少女レイ": ["BUMP OF CHICKEN"]})
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: None)
+
+    gst.run_score(100, "app", "tok")  # しきい値1,000,000
+
+    assert set(force_refresh_artists) == {"Suisei Hoshimachi", "BUMP OF CHICKEN"}
+    assert added == ["cover_v1"]  # 再取得後の元曲再生回数が超えたため対象になる

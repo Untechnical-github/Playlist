@@ -31,8 +31,8 @@ MIN_SEARCH_INTERVAL_SECONDS = float(os.environ.get("YOUTUBE_SEARCH_MIN_INTERVAL"
 _last_search_call_time = 0.0
 
 VIEW_CACHE_FILE = os.environ.get("YOUTUBE_VIEW_CACHE_FILE", "youtube_view_cache.json")
-CACHE_TTL_SECONDS = 7 * 24 * 3600  # 曲数が多いプレイリスト群を毎回全件検索し直すとクォータを使い切るため、
-# 一度調べた曲はこの期間はディスクキャッシュから再利用し、それを過ぎたら再取得する
+# 再生回数は基本的に増加のみで減らないため、一度調べた曲は期限を設けず恒久的にキャッシュから
+# 再利用する（呼び出し元がしきい値付近の曲だけ force_refresh で明示的に再取得する）
 
 
 def _throttle_search_calls() -> None:
@@ -69,18 +69,14 @@ def retry(func, *args, **kwargs):
 
 def load_view_cache(path: str = VIEW_CACHE_FILE):
     """前回までに調べた再生回数をディスクから読み込み、同じ曲をAPIで調べ直すのを避ける。
-    CACHE_TTL_SECONDSより古いエントリは再取得させるため読み込まない。
     戻り値は (get_youtube_view_count にそのまま渡せるcache辞書, キーごとの取得日時) のタプル。
     """
     if not os.path.exists(path):
         return {}, {}
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    now = time.time()
     cache: Dict[Tuple[str, str], Tuple[Optional[str], int]] = {}
     fetched_at: Dict[Tuple[str, str], float] = {}
     for key, entry in raw.items():
-        if now - entry["fetched_at"] > CACHE_TTL_SECONDS:
-            continue
         title, artist = key.split("\x1f", 1)
         cache[(title, artist)] = (entry["video_id"], entry["view_count"])
         fetched_at[(title, artist)] = entry["fetched_at"]
@@ -123,34 +119,69 @@ def fetch_playlist_tracks(playlist_id: str) -> list:
 
 
 def get_youtube_view_count(
-    youtube, title: str, artist: str, cache: Dict[Tuple[str, str], Tuple[Optional[str], int]]
+    youtube,
+    title: str,
+    artist: str,
+    cache: Dict[Tuple[str, str], Tuple[Optional[str], int]],
+    fetched_at: Optional[Dict[Tuple[str, str], float]] = None,
+    force_refresh: bool = False,
 ) -> Tuple[Optional[str], int]:
+    """曲の再生回数を返す。既にcacheにあり force_refresh でなければAPIを呼ばずそれを返す。
+
+    force_refresh=True で再取得した場合でも、新しく取得した値が既存のキャッシュ値より
+    少なければ更新しない（動画差し替え等による一時的な減少でキャッシュを退行させないため。
+    再生回数は基本的に増加のみで減らない前提）。
+
+    force_refresh=True かつキャッシュに video_id が既知の場合は、search.list
+    （100クォータ消費・呼び出し間隔の制限あり）をやり直さず、判明済みの video_id で
+    videos.list（1クォータ）だけ叩いて統計情報を更新する。video_idが未知（前回ヒットなし）
+    の場合のみ通常どおり検索からやり直す。
+    """
     key = (title, artist)
-    if key in cache:
-        return cache[key]
+    previous = cache.get(key)
+    if previous is not None and not force_refresh:
+        return previous
 
     query = f"{artist} {title}".strip()
 
-    def _search():
-        _throttle_search_calls()
-        return youtube.search().list(q=query, part="id", type="video", maxResults=1).execute()
+    if force_refresh and previous is not None and previous[0] is not None:
+        video_id = previous[0]
+        try:
+            stats_resp = retry(youtube.videos().list(id=video_id, part="statistics").execute)
+            stats_items = stats_resp.get("items", [])
+            view_count = int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
+        except HttpError as e:
+            logger.warning('YouTube API error refreshing stats for "%s": %s', query, e)
+            return previous
+    else:
+        def _search():
+            _throttle_search_calls()
+            return youtube.search().list(q=query, part="id", type="video", maxResults=1).execute()
 
-    try:
-        search_resp = retry(_search)
-        items = search_resp.get("items", [])
-        if not items:
-            logger.info('YouTube: no match for "%s"', query)
-            cache[key] = (None, 0)
-            return cache[key]
+        try:
+            search_resp = retry(_search)
+            items = search_resp.get("items", [])
+            if not items:
+                logger.info('YouTube: no match for "%s"', query)
+                video_id, view_count = None, 0
+            else:
+                video_id = items[0]["id"]["videoId"]
+                stats_resp = retry(youtube.videos().list(id=video_id, part="statistics").execute)
+                stats_items = stats_resp.get("items", [])
+                view_count = int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
+        except HttpError as e:
+            logger.warning('YouTube API error for "%s": %s', query, e)
+            video_id, view_count = None, 0
 
-        video_id = items[0]["id"]["videoId"]
-        stats_resp = retry(youtube.videos().list(id=video_id, part="statistics").execute)
-        stats_items = stats_resp.get("items", [])
-        view_count = int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
-        cache[key] = (video_id, view_count)
-    except HttpError as e:
-        logger.warning('YouTube API error for "%s": %s', query, e)
-        cache[key] = (None, 0)
+    if previous is not None and view_count < previous[1]:
+        logger.info(
+            'YouTube: view count decreased for "%s" (%d -> %d); keeping cached value', query, previous[1], view_count
+        )
+        return previous
+
+    cache[key] = (video_id, view_count)
+    if fetched_at is not None:
+        fetched_at[key] = time.time()
     return cache[key]
 
 
@@ -190,7 +221,7 @@ def main() -> None:
 
     raw: list = []
     for t in tracks:
-        video_id, view_count = get_youtube_view_count(youtube, t["title"], t["artist"], youtube_cache)
+        video_id, view_count = get_youtube_view_count(youtube, t["title"], t["artist"], youtube_cache, fetched_at)
         raw.append((t, video_id, view_count))
 
     save_view_cache(youtube_cache, fetched_at)
