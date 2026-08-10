@@ -35,6 +35,18 @@
       "ytmusic_checked": true
     }
   },
+  "Broken Bone\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    },
+    "aUDDP9RR_VU": {
+      "candidate_channel": "KALEO",
+      "candidate_title": "Broken Bones",
+      "status": "pending",
+      "view_count": 22877939
+    }
+  },
   "Butterfly\u001fBUMP OF CHICKEN": {
     "6FEDrU85FLE": {
       "candidate_channel": "Crazy Town",
@@ -53,6 +65,42 @@
       "candidate_title": "Darma Grand Prix",
       "status": "pending",
       "view_count": 4154316
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Death Disco\u001fSEKAI NO OWARI": {
+    "ZB0NdM1HyOU": {
+      "candidate_channel": "Sid Vicious",
+      "candidate_title": "Public Image Limited - Death Disco",
+      "status": "pending",
+      "view_count": 120481
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Diary\u001fSEKAI NO OWARI": {
+    "AiBG6vuLrzY": {
+      "candidate_channel": "mustang19ms",
+      "candidate_title": "Breaking Benjamin - Diary Of Jane lyrics",
+      "status": "pending",
+      "view_count": 59393217
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Dragon Night\u001fSEKAI NO OWARI": {
+    "OgK1R7P1NHg": {
+      "candidate_channel": "まめ",
+      "candidate_title": "Dragon Night クリスマス休戦 mad SEKAI NO OWARI 日本語フル",
+      "status": "pending",
+      "view_count": 6006806
     },
     "_meta": {
       "youtube_checked": false,
@@ -197,6 +245,54 @@
       "candidate_title": "The Outsider",
       "status": "pending",
       "view_count": 26131911
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Play\u001fSEKAI NO OWARI": {
+    "YQRHrco73g4": {
+      "candidate_channel": "Alan Walker",
+      "candidate_title": "Play (feat. Mangoo)",
+      "status": "pending",
+      "view_count": 163597824
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Rain\u001fSEKAI NO OWARI": {
+    "Xwy-3aI435o": {
+      "candidate_channel": "Creedence Clearwater Revival",
+      "candidate_title": "Have You Ever Seen The Rain",
+      "status": "pending",
+      "view_count": 245565532
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "Romantic\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    },
+    "zeVWTY31Vn8": {
+      "candidate_channel": "Sony Music India",
+      "candidate_title": "Top 30 Romantic Hindi Songs | Audio Jukebox | Bollywood Love Songs | Evergreen Melodies",
+      "status": "pending",
+      "view_count": 11648080
+    }
+  },
+  "Rpg\u001fSEKAI NO OWARI": {
+    "0QCZsgIfZkk": {
+      "candidate_channel": "Kehlani",
+      "candidate_title": "RPG (feat. 6lack)",
+      "status": "pending",
+      "view_count": 3012296
     },
     "_meta": {
       "youtube_checked": false,
@@ -353,6 +449,12 @@
       "ytmusic_checked": true
     }
   },
+  "アースチャイルド - Earthchild\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": true,
+      "ytmusic_checked": true
+    }
+  },
   "カルマ - Karuma\u001fBUMP OF CHICKEN": {
     "_meta": {
       "youtube_checked": true,
@@ -401,6 +503,18 @@
       "ytmusic_checked": true
     }
   },
+  "サザンカ - Sasanqua\u001fSEKAI NO OWARI": {
+    "9oTmZOWui70": {
+      "candidate_channel": "LOCAL CONNECT",
+      "candidate_title": "サザンカ - Sasanqua",
+      "status": "pending",
+      "view_count": 1823
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
   "スターライトパレード - Starlight Parade\u001fSEKAI NO OWARI": {
     "BQNwVF3NG2E": {
       "candidate_channel": "FlowBack",
@@ -417,6 +531,30 @@
     "_meta": {
       "youtube_checked": true,
       "ytmusic_checked": true
+    }
+  },
+  "スノーマジックファンタジー - Snow Magic Fantasy\u001fSEKAI NO OWARI": {
+    "QVq5hmeY_vU": {
+      "candidate_channel": "Relaxing Time Music",
+      "candidate_title": "スノーマジックファンタジー - Snow magic fantasy",
+      "status": "pending",
+      "view_count": 481
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "タイムマシン - Time Machine\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    },
+    "bmcVVOwkhE4": {
+      "candidate_channel": "Yuuri",
+      "candidate_title": "タイムマシン - Time Machine",
+      "status": "pending",
+      "view_count": 1105613
     }
   },
   "ダイヤモンド - Diamond\u001fBUMP OF CHICKEN": {
@@ -443,6 +581,18 @@
       "view_count": 1220383
     }
   },
+  "ピエロ - Pierrot\u001fSEKAI NO OWARI": {
+    "NHVNmMmu_1Q": {
+      "candidate_channel": "Rib",
+      "candidate_title": "ピエロ - Pierrot",
+      "status": "pending",
+      "view_count": 92426
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
   "ファイター - Fighter\u001fBUMP OF CHICKEN": {
     "1XX4qIo5KW8": {
       "candidate_channel": "jon-YAKITORY",
@@ -452,6 +602,30 @@
     },
     "_meta": {
       "youtube_checked": false,
+      "ytmusic_checked": true
+    }
+  },
+  "プレゼント - Present\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
+    },
+    "jQILVt98cmU": {
+      "candidate_channel": "Jitterin' Jinn",
+      "candidate_title": "プレゼント - Present",
+      "status": "pending",
+      "view_count": 9464802
+    }
+  },
+  "マーメイドラプソディー - Mermaidrhapsody\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": true,
+      "ytmusic_checked": true
+    }
+  },
+  "ムーンライトステーション - Moonlightstation\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
@@ -497,6 +671,12 @@
       "ytmusic_checked": true
     }
   },
+  "偉生人 - Iseijin\u001fVaundy": {
+    "_meta": {
+      "youtube_checked": true,
+      "ytmusic_checked": true
+    }
+  },
   "友達の唄 - Tomodachinouta\u001fBUMP OF CHICKEN": {
     "_meta": {
       "youtube_checked": false,
@@ -507,6 +687,18 @@
       "candidate_title": "友達の唄 - Tomodachinouta",
       "status": "pending",
       "view_count": 324739
+    }
+  },
+  "図鑑 - Zukan\u001fSEKAI NO OWARI": {
+    "K2zy4jF-XJg": {
+      "candidate_channel": "YUZU",
+      "candidate_title": "図鑑 - Zukan",
+      "status": "pending",
+      "view_count": 334225
+    },
+    "_meta": {
+      "youtube_checked": false,
+      "ytmusic_checked": true
     }
   },
   "天体観測 - Tentaikansoku\u001fBUMP OF CHICKEN": {
@@ -587,6 +779,12 @@
       "ytmusic_checked": true
     }
   },
+  "炎と森のカーニバル - Honootomorinocarnival\u001fSEKAI NO OWARI": {
+    "_meta": {
+      "youtube_checked": true,
+      "ytmusic_checked": true
+    }
+  },
   "狭心症 - Kyoshinsho\u001fRADWIMPS": {
     "_meta": {
       "youtube_checked": true,
@@ -624,6 +822,12 @@
     }
   },
   "車輪の唄 - Sharinnouta\u001fBUMP OF CHICKEN": {
+    "_meta": {
+      "youtube_checked": true,
+      "ytmusic_checked": true
+    }
+  },
+  "銀河街の悪夢 - Gingagainoakumu\u001fSEKAI NO OWARI": {
     "_meta": {
       "youtube_checked": true,
       "ytmusic_checked": true
