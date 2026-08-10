@@ -31,6 +31,8 @@ def test_get_source_playlists_excludes_playlist_prefixed_and_english_songs(monke
         {"id": "PL3", "snippet": {"title": "Playlist II"}},
         {"id": "PL4", "snippet": {"title": "English Songs"}},
         {"id": "PL5", "snippet": {"title": "BUMP OF CHICKEN"}},
+        # YouTube Musicが自動生成する高評価動画プレイリスト。他の集計対象と曲が重複しやすいため除外
+        {"id": "PL6", "snippet": {"title": "高く評価した音楽"}},
     ]
     monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: all_playlists)
 
@@ -131,6 +133,47 @@ def test_confirmed_cover_video_ids_returns_only_yes_status_candidates():
 
 def test_confirmed_cover_video_ids_returns_empty_list_for_unknown_track():
     assert gst.confirmed_cover_video_ids({}, "Unknown Song", "Unknown Artist") == []
+
+
+def test_run_score_adds_duplicate_video_id_only_once_when_track_is_in_multiple_playlists(monkeypatch):
+    # 同じ曲が複数の集計対象プレイリストに入っていると matches に同じ video_id が複数回入る。
+    # 2回目もadd_playlist_itemを呼んでしまうと、YouTube側で「たった今追加した重複」として
+    # 409 Conflictになる実際の不具合の再現ケース
+    playlists = [
+        {"id": "PL_SRC_1", "snippet": {"title": "Eve"}},
+        {"id": "PL_SRC_2", "snippet": {"title": "お気に入り"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks_by_playlist = {
+        "PL_SRC_1": [{"title": "廻廻奇譚", "artist": "Eve"}],
+        "PL_SRC_2": [{"title": "廻廻奇譚", "artist": "Eve"}],  # 別プレイリストに同じ曲が重複して入っている
+    }
+
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False, known_video_id=None):
+        result = ("v1", 2_000_000)
+        cache[(title, artist)] = result
+        return result
+
+    added = []
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks_by_playlist[playlist_id])
+    monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "load_cover_candidates", lambda: {})
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "build_ytmusic_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: added.append(video_id))
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: None)
+    monkeypatch.setattr(gst, "send_paginated_message", lambda app_id, token, header, lines: None)
+
+    gst.run_score(100, "app", "tok")  # 100万回再生以上
+
+    assert added == ["v1"]  # 2回登場しても追加は1回だけ
 
 
 def test_run_score_uses_confirmed_cover_candidate_view_count_but_adds_the_cover_track(monkeypatch):
@@ -395,6 +438,42 @@ def test_discover_cover_candidates_finds_candidate_via_ytmusic_without_youtube_f
     assert track_data["_meta"] == {"ytmusic_checked": True, "youtube_checked": False}
 
     assert saved and committed
+
+
+def test_looks_like_same_artist_matches_exact_and_substring_variants():
+    assert gst._looks_like_same_artist("Eve", "Eve") is True
+    assert gst._looks_like_same_artist("Eve Official", "Eve") is True  # 公式チャンネルの別名義
+    assert gst._looks_like_same_artist("Eve", "Eve Official") is True
+    assert gst._looks_like_same_artist("Someone Else", "Eve") is False
+    assert gst._looks_like_same_artist("", "Eve") is False
+
+
+def test_discover_cover_candidates_excludes_candidates_from_the_same_artist(monkeypatch):
+    # 曲名だけの検索では、別人によるカバー・コラボではなく本人の別アップロード
+    # （MV・リリックビデオ等）まで拾ってしまうことがあるため、それらは候補から除外する
+    tracks = [{"title": "廻廻奇譚", "artist": "Eve"}]
+    cache = {("廻廻奇譚", "Eve"): ("own_v1", 500_000)}
+    cover_candidates = {}
+
+    def fake_ytmusic_search(yt, title, max_results=5):
+        return [
+            ("lyric_v1", "廻廻奇譚 (Lyric Video)", "Eve"),  # 本人の別アップロード → 除外
+            ("official_v1", "廻廻奇譚 Official Audio", "Eve Official"),  # 同様に除外
+            ("cover_v1", "廻廻奇譚 (Cover)", "Someone Else"),  # 別人のカバー → 候補になる
+        ]
+
+    def fake_stats(youtube, video_ids):
+        assert set(video_ids) == {"cover_v1"}  # 本人名義の2件は統計取得すら行わない
+        return {"cover_v1": 5_000_000}
+
+    monkeypatch.setattr(gst, "search_videos_by_title_ytmusic", fake_ytmusic_search)
+    monkeypatch.setattr(gst, "get_view_counts_for_video_ids", fake_stats)
+    _no_commit(monkeypatch)
+
+    result = gst.discover_cover_candidates(object(), object(), tracks, cache, 1_000_000, cover_candidates)
+
+    assert len(result) == 1
+    assert result[0]["video_id"] == "cover_v1"
 
 
 def test_discover_cover_candidates_falls_back_to_youtube_when_ytmusic_finds_nothing(monkeypatch):

@@ -30,7 +30,10 @@ DISCORD_API = "https://discord.com/api/v10"
 
 TARGET_PLAYLIST_NAME = "Playlist"
 EXCLUDED_TITLE_PREFIX = "Playlist"  # "Playlist"・"Playlist II" 等、集計先とその仲間は対象外
-EXCLUDED_EXACT_TITLES = {"English Songs"}
+# 「高く評価した音楽」はYouTube Musicが自動生成する高評価動画のプレイリストで、他の
+# 集計対象プレイリストと曲が重複しやすい（同じ曲が複数プレイリストに入り、Playlistへの
+# 二重追加を招く一因になっていた）ため対象外にする。表記ゆれに備えて旧名称も残しておく。
+EXCLUDED_EXACT_TITLES = {"English Songs", "高く評価した曲", "高く評価した音楽"}
 VIEW_UNIT = 10_000  # しきい値は「万回再生」単位で指定される
 MAX_MESSAGE_LENGTH = 1900  # Discordのメッセージ本文上限(2000文字)に余裕を持たせる
 
@@ -82,13 +85,30 @@ def confirmed_cover_video_ids(cover_candidates: dict, title: str, artist: str) -
     return [video_id for video_id, entry in candidates.items() if entry.get("status") == "yes"]
 
 
-def _pick_best_new_candidate(youtube, results: list, own_video_id, known_candidate_ids: set, title_lower: str):
-    """検索結果から、自分自身・既知の候補を除いた新規候補のうち再生回数最大の1件を選ぶ。
-    見つからなければNoneを返す。"""
+def _looks_like_same_artist(candidate_channel: str, track_artist: str) -> bool:
+    """候補のチャンネル/アーティスト名が、曲のクレジット上のアーティストと実質同じかどうかを
+    大まかに判定する。曲名だけで検索すると、別人によるカバー・コラボではなく本人の別アップロード
+    （MV・リリックビデオ・Audio版等）まで候補として拾ってしまうため、それを除外するために使う。
+    """
+    a = candidate_channel.strip().lower()
+    b = track_artist.strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
+def _pick_best_new_candidate(
+    youtube, results: list, own_video_id, known_candidate_ids: set, title_lower: str, track_artist: str
+):
+    """検索結果から、自分自身・既知の候補・本人による別アップロードらしきものを除いた新規候補の
+    うち再生回数最大の1件を選ぶ。見つからなければNoneを返す。"""
     new_results = [
         (video_id, video_title, channel)
         for video_id, video_title, channel in results
-        if video_id != own_video_id and video_id not in known_candidate_ids and title_lower in video_title.lower()
+        if video_id != own_video_id
+        and video_id not in known_candidate_ids
+        and title_lower in video_title.lower()
+        and not _looks_like_same_artist(channel, track_artist)
     ]
     if not new_results:
         return None
@@ -159,7 +179,9 @@ def discover_cover_candidates(
             results = search_videos_by_title_ytmusic(ytmusic, t["title"], max_results=COVER_DISCOVERY_SEARCH_RESULTS)
             meta["ytmusic_checked"] = True
             touched = True
-            found = _pick_best_new_candidate(youtube, results, own_video_id, known_candidate_ids, title_lower)
+            found = _pick_best_new_candidate(
+                youtube, results, own_video_id, known_candidate_ids, title_lower, t["artist"]
+            )
 
         if (
             found is None
@@ -170,7 +192,9 @@ def discover_cover_candidates(
             youtube_searches_used += 1
             meta["youtube_checked"] = True
             touched = True
-            found = _pick_best_new_candidate(youtube, results, own_video_id, known_candidate_ids, title_lower)
+            found = _pick_best_new_candidate(
+                youtube, results, own_video_id, known_candidate_ids, title_lower, t["artist"]
+            )
 
         if not touched:
             continue  # ytmusic検索済み・YouTube検索は今回の上限に達していて試せなかった
@@ -435,10 +459,15 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     qualifying_video_ids = {video_id for _, video_id, _ in matches}
 
     newly_added = []
+    added_this_run = set()
     for t, video_id, view_count in matches:
-        if video_id in original_by_video_id:
+        # 同じ曲が複数の集計対象プレイリストに入っていると、matches に同じ video_id が
+        # 複数回入ることがある。original_by_video_id は実行開始時点のスナップショットなので
+        # 今回すでに追加した分は反映されておらず、それだけでは二重追加を防げない
+        if video_id in original_by_video_id or video_id in added_this_run:
             continue
         add_playlist_item(auth_header, target_playlist_id, video_id)
+        added_this_run.add(video_id)
         newly_added.append((t, view_count))
 
     removed = []
