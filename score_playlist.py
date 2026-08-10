@@ -51,12 +51,25 @@ def _is_daily_quota_exceeded(e: Exception) -> bool:
     return isinstance(e, HttpError) and e.resp is not None and e.resp.status == 429 and "per day" in str(e)
 
 
+# このプロセス（＝GitHub Actionsの1回の実行）内で一度でも1日あたりのクォータ超過を検知したか。
+# 実行が完走したように見えても、実は途中でクォータが尽きて一部の曲を確認できていない、という
+# ことをDiscordのメッセージで利用者に伝えるために使う。プロセスごとにリセットされるので
+# モジュールレベルのフラグで十分（呼び出し階層をまたいで持ち回す必要がない）。
+_daily_quota_exceeded_seen = False
+
+
+def was_daily_quota_exceeded() -> bool:
+    """このプロセス内で1日あたりのクォータ超過を一度でも検知していればTrue。"""
+    return _daily_quota_exceeded_seen
+
+
 def retry(func, *args, **kwargs):
     """簡易リトライ：失敗するたびに待ち時間を伸ばしながら再試行し、それでも失敗したら例外を送出する。
     「Search Queries per minute」のようなレート制限（429）は数秒の待機では解消しないことが多いため、
     通常のAPIエラーより長めに待ってから再試行する。1日あたりのクォータ超過はいくら待っても
     回復しないため、即座に諦める（無駄な待機・API呼び出しを避けるため）。
     """
+    global _daily_quota_exceeded_seen
     last_error: Optional[Exception] = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -64,6 +77,7 @@ def retry(func, *args, **kwargs):
         except Exception as e:  # noqa: BLE001 - 呼び出し先のAPIエラーは種類を問わずリトライ対象にする
             last_error = e
             if _is_daily_quota_exceeded(e):
+                _daily_quota_exceeded_seen = True
                 logger.warning("Daily quota exceeded (%s); giving up without retrying", e)
                 break
             if attempt == MAX_RETRIES:

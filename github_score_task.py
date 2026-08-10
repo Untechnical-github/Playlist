@@ -24,6 +24,7 @@ from score_playlist import (
     save_view_cache,
     search_videos_by_title,
     search_videos_by_title_ytmusic,
+    was_daily_quota_exceeded,
 )
 
 DISCORD_API = "https://discord.com/api/v10"
@@ -444,6 +445,17 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     finally:
         save_view_cache(cache, fetched_at)
 
+    # 今回の実行で対象曲のうちどこまで再生回数を確認できたか、クォータを使い切って途中で
+    # 打ち切られていないかを、利用者が実行結果だけでは判断できないため明示的にメッセージへ含める
+    verified_count = sum(1 for t in all_tracks if (t["title"], t["artist"]) in cache)
+    quota_note = (
+        "\n⚠️ 本日のYouTube検索クォータを使い切ったため、一部の曲は確認できていません。"
+        "翌日以降に`/score`を再実行すると続きから処理されます。"
+        if was_daily_quota_exceeded()
+        else ""
+    )
+    progress_note = f"（対象{len(all_tracks)}曲中{verified_count}曲を確認済み）"
+
     target_playlist_id = find_playlist_id_by_title(auth_header, TARGET_PLAYLIST_NAME)
     if target_playlist_id is None:
         post_followup(
@@ -488,7 +500,8 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
             application_id,
             interaction_token,
             f"変更はありませんでした（しきい値: {threshold}万回再生以上、"
-            f"集計対象プレイリスト{len(source_playlists)}件、対象{len(matches)}曲）。",
+            f"集計対象プレイリスト{len(source_playlists)}件、対象{len(matches)}曲）"
+            f"{progress_note}。{quota_note}",
         )
         return
 
@@ -498,14 +511,14 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
             f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
             f"追加{len(newly_added)}曲・削除{len(removed)}曲"
             + (f"・確認できず保留{len(skipped)}曲" if skipped else "")
-            + "）\n"
+            + f"）{progress_note}\n{quota_note}\n"
         )
     else:
         # 追加・削除は無いが、確認できず保留にした曲だけはある場合
         header = (
             f"**「{TARGET_PLAYLIST_NAME}」に追加・削除の変更はありませんでした**"
             f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
-            f"確認できず保留{len(skipped)}曲）\n"
+            f"確認できず保留{len(skipped)}曲）{progress_note}\n{quota_note}\n"
         )
     lines = [f"・追加: {t['title']} - {t['artist']}（views: {view_count:,}）" for t, view_count in newly_added]
     lines += [f"・削除: {title}（しきい値未満になったため）" for title in removed]

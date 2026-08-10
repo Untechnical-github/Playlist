@@ -115,6 +115,53 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
     assert "Song B" not in combined  # しきい値未満
     assert "Song C" not in combined  # 既に追加済みで今回も条件を満たすので追加/削除どちらの報告にも出ない
     assert "Old Song" in combined  # 保留された曲として報告される
+    assert "対象4曲中4曲を確認済み" in combined  # 4曲すべて確認できたことが分かる
+    assert "クォータ" not in combined  # クォータ超過は起きていないので警告は出ない
+
+
+def _setup_common_run_score_mocks(monkeypatch, playlists, tracks, fake_get_youtube_view_count):
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "load_cover_candidates", lambda: {})
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "build_ytmusic_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: [])
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: None)
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: None)
+
+
+def test_run_score_includes_quota_warning_when_daily_quota_exceeded(monkeypatch):
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "Eve"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [
+        {"title": "Song A", "artist": "Artist A"},  # 確認できる
+        {"title": "Song B", "artist": "Artist B"},  # クォータ切れで確認できない
+    ]
+
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False, known_video_id=None):
+        if title == "Song A":
+            result = ("v1", 100)
+            cache[(title, artist)] = result
+            return result
+        return (None, 0)  # Song Bはクォータ切れ相当で未確認のまま（cacheに書き込まない）
+
+    _setup_common_run_score_mocks(monkeypatch, playlists, tracks, fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "was_daily_quota_exceeded", lambda: True)
+
+    sent = []
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: sent.append(content))
+
+    gst.run_score(100, "app", "tok")
+
+    combined = "".join(sent)
+    assert "対象2曲中1曲を確認済み" in combined
+    assert "本日のYouTube検索クォータを使い切った" in combined
 
 
 def test_confirmed_cover_video_ids_returns_only_yes_status_candidates():
