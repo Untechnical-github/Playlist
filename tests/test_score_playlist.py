@@ -295,3 +295,139 @@ def test_get_youtube_view_count_returns_previous_on_api_error_without_touching_c
     assert result == ("v1", 1_000)
     assert cache[("Song A", "Artist A")] == ("v1", 1_000)
     assert fetched_at[("Song A", "Artist A")] == 123.0
+
+
+def test_get_youtube_view_count_uses_known_video_id_to_skip_search_on_first_fetch(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[4_000_000])
+    cache = {}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(
+        youtube, "Song A", "Artist A", cache, fetched_at, known_video_id="known_v1"
+    )
+
+    assert result == ("known_v1", 4_000_000)
+    assert cache[("Song A", "Artist A")] == ("known_v1", 4_000_000)
+    assert youtube.search_call_count == 0  # ytmusicapiで既知のvideo_idなのでsearch.listは不要
+    assert ("Song A", "Artist A") in fetched_at
+
+
+def test_get_youtube_view_count_prefers_existing_cache_over_known_video_id(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[999_999])  # 呼ばれたら明らかにおかしい値
+    cache = {("Song A", "Artist A"): ("cached_v", 1_000)}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(
+        youtube, "Song A", "Artist A", cache, fetched_at, known_video_id="different_v"
+    )
+
+    assert result == ("cached_v", 1_000)
+    assert youtube.search_call_count == 0
+
+
+def test_get_youtube_view_count_known_video_id_does_not_poison_cache_on_api_error(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _VideosFailsYouTube(_daily_quota_error())
+    cache = {}
+    fetched_at = {}
+
+    result = sp.get_youtube_view_count(
+        youtube, "Song A", "Artist A", cache, fetched_at, known_video_id="known_v1"
+    )
+
+    assert result == (None, 0)
+    assert cache == {}
+
+
+class _FakeTitleSearchYouTube:
+    """search().list(part="id,snippet", ...).execute() が複数件返すフェイク（曲名のみ検索用）。"""
+
+    def __init__(self, items):
+        self._items = items
+        self.search_call_count = 0
+
+    def search(self):
+        outer = self
+
+        class _List:
+            def list(self, **kwargs):
+                class _Exec:
+                    def execute(self_inner):
+                        outer.search_call_count += 1
+                        return {
+                            "items": [
+                                {"id": {"videoId": vid}, "snippet": {"title": title, "channelTitle": channel}}
+                                for vid, title, channel in outer._items
+                            ]
+                        }
+
+                return _Exec()
+
+        return _List()
+
+
+def test_search_videos_by_title_returns_id_title_channel_for_each_result(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeTitleSearchYouTube(
+        [("v1", "廻廻奇譚 (Cover)", "Some Channel"), ("v2", "廻廻奇譚 - Eve", "Eve Official")]
+    )
+
+    results = sp.search_videos_by_title(youtube, "廻廻奇譚")
+
+    assert results == [("v1", "廻廻奇譚 (Cover)", "Some Channel"), ("v2", "廻廻奇譚 - Eve", "Eve Official")]
+    assert youtube.search_call_count == 1
+
+
+def test_search_videos_by_title_returns_empty_list_on_api_error(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _SearchFailsYouTube(_daily_quota_error())
+
+    assert sp.search_videos_by_title(youtube, "廻廻奇譚") == []
+
+
+def test_get_view_count_by_video_id_fetches_and_caches_under_synthetic_key(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[5_000_000])
+    cache = {}
+    fetched_at = {}
+
+    result = sp.get_view_count_by_video_id(youtube, "abc123", cache, fetched_at)
+
+    assert result == 5_000_000
+    assert cache[("__video__", "abc123")] == ("abc123", 5_000_000)
+    assert ("__video__", "abc123") in fetched_at
+
+
+def test_get_view_count_by_video_id_uses_cache_without_calling_api_when_not_forced(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[999_999_999])  # 呼ばれたら明らかにおかしい値
+    cache = {("__video__", "abc123"): ("abc123", 1_000)}
+    fetched_at = {}
+
+    assert sp.get_view_count_by_video_id(youtube, "abc123", cache, fetched_at) == 1_000
+
+
+def test_get_view_count_by_video_id_force_refresh_keeps_value_when_decreased(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _FakeYouTube(view_counts=[500])
+    cache = {("__video__", "abc123"): ("abc123", 1_000)}
+    fetched_at = {}
+
+    result = sp.get_view_count_by_video_id(youtube, "abc123", cache, fetched_at, force_refresh=True)
+
+    assert result == 1_000
+    assert cache[("__video__", "abc123")] == ("abc123", 1_000)
+
+
+def test_get_view_count_by_video_id_returns_zero_when_never_cached_and_api_fails(monkeypatch):
+    monkeypatch.setattr(sp, "_throttle_search_calls", lambda: None)
+    youtube = _VideosFailsYouTube(_daily_quota_error())
+    cache = {}
+    fetched_at = {}
+
+    result = sp.get_view_count_by_video_id(youtube, "abc123", cache, fetched_at)
+
+    assert result == 0
+    assert cache == {}  # 未確定なのでキャッシュに固定しない

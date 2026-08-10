@@ -4,6 +4,9 @@ on:
   repository_dispatch:
     types: [discord-sort]
 
+permissions:
+  contents: write # コラボ・カバー候補の判定（cover_candidates.json）をActionsから直接コミットするため
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -18,6 +21,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write auth files
+        if: github.event.client_payload.mode != 'cover_decide'
         run: |
           mkdir -p auth
           echo "$OAUTH_TOKEN_JSON" > auth/oauth.json
@@ -27,7 +31,7 @@ jobs:
           OAUTH_CLIENT_JSON: ${{ secrets.OAUTH_CLIENT_JSON }}
 
       - name: Run sort task
-        if: github.event.client_payload.mode != 'score'
+        if: github.event.client_payload.mode != 'score' && github.event.client_payload.mode != 'cover_decide'
         run: python github_task.py
         env:
           TASK_MODE: ${{ github.event.client_payload.mode }}
@@ -52,3 +56,11 @@ jobs:
           APPLICATION_ID: ${{ github.event.client_payload.application_id }}
           INTERACTION_TOKEN: ${{ github.event.client_payload.interaction_token }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+
+      - name: Run cover decide task
+        if: github.event.client_payload.mode == 'cover_decide'
+        run: python github_score_task.py
+        env:
+          TASK_MODE: cover_decide
+          VIDEO_ID: ${{ github.event.client_payload.video_id }}
+          DECISION: ${{ github.event.client_payload.decision }}

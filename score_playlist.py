@@ -114,19 +114,146 @@ def save_view_cache(
     Path(path).write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
 
 
-def fetch_playlist_tracks(playlist_id: str) -> list:
-    """ytmusicapi でプレイリストの曲名・アーティスト名を取得する。
-    auth/headers_auth.json があれば使い、無ければ認証なし（限定公開/公開プレイリストのみ）で取得する。
-    """
+def build_ytmusic_client() -> YTMusic:
+    """auth/headers_auth.json があれば使い、無ければ認証なし（限定公開/公開プレイリストのみ・
+    検索は認証不要）でYTMusicクライアントを作る。"""
     auth_file = os.environ.get("YTMUSIC_AUTH_FILE", "auth/headers_auth.json")
-    yt = YTMusic(auth_file) if os.path.exists(auth_file) else YTMusic()
+    return YTMusic(auth_file) if os.path.exists(auth_file) else YTMusic()
+
+
+def search_videos_by_title_ytmusic(yt: YTMusic, title: str, max_results: int = 5) -> list:
+    """YouTube Data APIのクォータを消費せず、ytmusicapi経由でYouTube Musicのカタログ
+    （"songs"）と動画（"videos"）の両方を曲名で検索する。カバー曲は公式カタログに乗っている
+    ことも多いため"songs"も対象にする。[(video_id, title, artist_or_channel), ...] を返す。
+    失敗しても例外を投げず、その検索区分の結果を空として続行する（ytmusicapiは非公式APIで
+    エラーの型が一定しないため、個別の失敗で探索全体を止めないようbroadにキャッチする）。
+    """
+    results = []
+    for search_filter in ("songs", "videos"):
+        try:
+            items = yt.search(title, filter=search_filter, limit=max_results)
+        except Exception as e:  # noqa: BLE001 - 非公式APIのため例外の型を限定できない
+            logger.warning('ytmusicapi search error for "%s" (filter=%s): %s', title, search_filter, e)
+            continue
+        for item in items or []:
+            video_id = item.get("videoId")
+            if not video_id:
+                continue
+            artists = [a.get("name", "") for a in (item.get("artists") or []) if a.get("name")]
+            results.append((video_id, item.get("title") or "", artists[0] if artists else ""))
+    return results
+
+
+def fetch_playlist_tracks(playlist_id: str) -> list:
+    """ytmusicapi でプレイリストの曲名・アーティスト名・video_id を取得する。
+
+    ytmusicapiが返す各trackには、YouTube Music側で既に紐付いている`videoId`が含まれている。
+    これは自分のプレイリストに入っている曲そのものなので、`get_youtube_view_count`に渡せば
+    `search.list`での検索を省略でき、初回取得のクォータ消費を100分の1（`videos.list`の1のみ）に
+    減らせる。
+    """
+    yt = build_ytmusic_client()
 
     data = yt.get_playlist(playlist_id, limit=None)
     tracks = []
     for item in data["tracks"]:
         artists = [a["name"] for a in (item.get("artists") or []) if a.get("name")]
-        tracks.append({"title": item.get("title") or "", "artist": artists[0] if artists else ""})
+        tracks.append(
+            {
+                "title": item.get("title") or "",
+                "artist": artists[0] if artists else "",
+                "video_id": item.get("videoId"),
+            }
+        )
     return tracks
+
+
+def _fetch_stats_only(youtube, video_id: str, label: str) -> Optional[int]:
+    """video_idが既知の動画について、search.listをやり直さずvideos.list（1クォータ）だけで
+    再生回数を取得する。失敗したらNoneを返す（呼び出し元は既存の値を維持すること）。
+    """
+    try:
+        stats_resp = retry(youtube.videos().list(id=video_id, part="statistics").execute)
+        stats_items = stats_resp.get("items", [])
+        return int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
+    except HttpError as e:
+        logger.warning('YouTube API error refreshing stats for "%s": %s', label, e)
+        return None
+
+
+def get_view_count_by_video_id(
+    youtube,
+    video_id: str,
+    cache: Dict[Tuple[str, str], Tuple[Optional[str], int]],
+    fetched_at: Optional[Dict[Tuple[str, str], float]] = None,
+    force_refresh: bool = False,
+) -> int:
+    """video_idが既知の動画（コラボ・カバー候補として確定済みのもの等）の再生回数を返す。
+    search.listは使わず、youtube_view_cache.json と同じcache辞書に間借りする合成キー
+    ("__video__", video_id) で結果をキャッシュする（曲名・アーティスト名の組み合わせキーとは
+    衝突しない）。減少時に既存値を維持する挙動は get_youtube_view_count と同じ。
+    """
+    key = ("__video__", video_id)
+    previous = cache.get(key)
+    if previous is not None and not force_refresh:
+        return previous[1]
+
+    view_count = _fetch_stats_only(youtube, video_id, video_id)
+    if view_count is None:
+        return previous[1] if previous is not None else 0
+
+    if previous is not None and view_count < previous[1]:
+        return previous[1]
+
+    cache[key] = (video_id, view_count)
+    if fetched_at is not None:
+        fetched_at[key] = time.time()
+    return view_count
+
+
+def get_view_counts_for_video_ids(youtube, video_ids: list) -> Dict[str, int]:
+    """複数のvideo_idの再生回数を1回のvideos.list呼び出し（カンマ区切り、最大50件、1クォータ）で
+    まとめて取得する。キャッシュを経由せず一時的に必要なとき（コラボ・カバー候補の絞り込み等）に使う。
+    """
+    if not video_ids:
+        return {}
+    try:
+        resp = retry(youtube.videos().list(id=",".join(video_ids), part="statistics").execute)
+    except HttpError as e:
+        logger.warning("YouTube API error fetching stats for %d video ids: %s", len(video_ids), e)
+        return {}
+    result: Dict[str, int] = {}
+    for item in resp.get("items", []):
+        video_id = item.get("id")
+        if not video_id:
+            continue
+        result[video_id] = int(item.get("statistics", {}).get("viewCount", 0))
+    return result
+
+
+def search_videos_by_title(youtube, title: str, max_results: int = 5) -> list:
+    """曲名だけ（アーティスト名を含めず）で検索し、[(video_id, video_title, channel_title), ...]を
+    返す。get_youtube_view_countの「アーティスト名+曲名」検索より幅広い候補がヒットするため、
+    コラボ・カバー候補の自動探索に使う。失敗したら空リストを返す。
+    """
+    def _search():
+        _throttle_search_calls()
+        return youtube.search().list(q=title, part="id,snippet", type="video", maxResults=max_results).execute()
+
+    try:
+        search_resp = retry(_search)
+    except HttpError as e:
+        logger.warning('YouTube API error searching by title "%s": %s', title, e)
+        return []
+
+    results = []
+    for item in search_resp.get("items", []):
+        video_id = item.get("id", {}).get("videoId")
+        if not video_id:
+            continue
+        snippet = item.get("snippet", {})
+        results.append((video_id, snippet.get("title", ""), snippet.get("channelTitle", "")))
+    return results
 
 
 def get_youtube_view_count(
@@ -136,6 +263,7 @@ def get_youtube_view_count(
     cache: Dict[Tuple[str, str], Tuple[Optional[str], int]],
     fetched_at: Optional[Dict[Tuple[str, str], float]] = None,
     force_refresh: bool = False,
+    known_video_id: Optional[str] = None,
 ) -> Tuple[Optional[str], int]:
     """曲の再生回数を返す。既にcacheにあり force_refresh でなければAPIを呼ばずそれを返す。
 
@@ -145,8 +273,11 @@ def get_youtube_view_count(
 
     force_refresh=True かつキャッシュに video_id が既知の場合は、search.list
     （100クォータ消費・呼び出し間隔の制限あり）をやり直さず、判明済みの video_id で
-    videos.list（1クォータ）だけ叩いて統計情報を更新する。video_idが未知（前回ヒットなし）
-    の場合のみ通常どおり検索からやり直す。
+    videos.list（1クォータ）だけ叩いて統計情報を更新する。
+
+    キャッシュに無い（初回取得の）場合でも、known_video_id（ytmusicapiが返す、自分の
+    プレイリストの曲に既に紐付いているvideoId等）が分かっていれば同様にsearch.listを
+    省略する。search.listが必要になるのは、キャッシュも known_video_id も無い場合だけ。
     """
     key = (title, artist)
     previous = cache.get(key)
@@ -157,13 +288,14 @@ def get_youtube_view_count(
 
     if force_refresh and previous is not None and previous[0] is not None:
         video_id = previous[0]
-        try:
-            stats_resp = retry(youtube.videos().list(id=video_id, part="statistics").execute)
-            stats_items = stats_resp.get("items", [])
-            view_count = int(stats_items[0]["statistics"].get("viewCount", 0)) if stats_items else 0
-        except HttpError as e:
-            logger.warning('YouTube API error refreshing stats for "%s": %s', query, e)
+        view_count = _fetch_stats_only(youtube, video_id, query)
+        if view_count is None:
             return previous
+    elif previous is None and known_video_id:
+        video_id = known_video_id
+        view_count = _fetch_stats_only(youtube, video_id, query)
+        if view_count is None:
+            return (None, 0)
     else:
         def _search():
             _throttle_search_calls()
@@ -235,7 +367,9 @@ def main() -> None:
 
     raw: list = []
     for t in tracks:
-        video_id, view_count = get_youtube_view_count(youtube, t["title"], t["artist"], youtube_cache, fetched_at)
+        video_id, view_count = get_youtube_view_count(
+            youtube, t["title"], t["artist"], youtube_cache, fetched_at, known_video_id=t.get("video_id")
+        )
         raw.append((t, video_id, view_count))
 
     save_view_cache(youtube_cache, fetched_at)

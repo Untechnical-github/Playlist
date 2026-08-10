@@ -128,7 +128,7 @@ async function handleComponent(interaction, env, ctx) {
   const customId = interaction.data.custom_id || "";
   const sep = customId.indexOf(":");
   const action = sep === -1 ? customId : customId.slice(0, sep);
-  const playlistId = sep === -1 ? "" : customId.slice(sep + 1);
+  const value = sep === -1 ? "" : customId.slice(sep + 1);
 
   if (action === "cancel") {
     return json({
@@ -141,7 +141,7 @@ async function handleComponent(interaction, env, ctx) {
     ctx.waitUntil(
       triggerGithubAction(env, {
         mode: "apply",
-        playlist_id: playlistId,
+        playlist_id: value,
         application_id: interaction.application_id,
         interaction_token: interaction.token,
       }).catch(() => {})
@@ -149,6 +149,49 @@ async function handleComponent(interaction, env, ctx) {
     return json({
       type: 7,
       data: { content: "反映中…", components: [] },
+    });
+  }
+
+  if (action === "covyes" || action === "covno") {
+    // コラボ・カバー候補の確認ボタン。判定の永続化（Gitへのコミット）はGitHub Actions側で
+    // 非同期に行い、ここではメッセージ上の該当行だけを即座に更新して応答する。他の行（他の
+    // 候補）はそのまま残すため、interaction.message.components（Discordがinteractionペイロード
+    // に含めてくれる、押された時点のメッセージの状態）を元に該当行だけ差し替える。
+    const videoId = value;
+    const decision = action === "covyes" ? "yes" : "no";
+    const originalComponents = (interaction.message && interaction.message.components) || [];
+    const components = originalComponents.map((row) => {
+      const clicked = (row.components || []).find((c) => c.custom_id === customId);
+      if (!clicked) return row;
+      return {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: decision === "yes" ? 3 : 4,
+            label: `${clicked.label} ✓`,
+            custom_id: `covdone:${videoId}`,
+            disabled: true,
+          },
+        ],
+      };
+    });
+
+    ctx.waitUntil(
+      triggerGithubAction(env, {
+        mode: "cover_decide",
+        video_id: videoId,
+        decision,
+      }).catch(() => {})
+    );
+
+    return json({
+      type: 7,
+      data: {
+        content: interaction.message && interaction.message.content,
+        embeds: (interaction.message && interaction.message.embeds) || [],
+        components,
+      },
     });
   }
 
