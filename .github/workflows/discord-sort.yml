@@ -64,3 +64,5 @@ jobs:
           TASK_MODE: cover_decide
           VIDEO_ID: ${{ github.event.client_payload.video_id }}
           DECISION: ${{ github.event.client_payload.decision }}
+          CHANNEL_ID: ${{ github.event.client_payload.channel_id }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}

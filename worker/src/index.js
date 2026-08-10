@@ -182,6 +182,9 @@ async function handleComponent(interaction, env, ctx) {
         mode: "cover_decide",
         video_id: videoId,
         decision,
+        // このモードにはinteraction_tokenが無いため、失敗時にBotトークンでエラーを
+        // 通知できるようchannel_idを渡しておく
+        channel_id: interaction.channel_id,
       }).catch(() => {})
     );
 

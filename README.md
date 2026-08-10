@@ -334,8 +334,9 @@ CLI版（`python score_playlist.py`）とは動作が異なり、**自分の全�
     以前のバージョンとは異なり自動削除はされなくなった
   - 追加・削除・保留はいずれも今回実行分だけがメッセージに表示される（何も省略せず、長い場合は
     複数メッセージに分割される）
-- プレイリストの取得・追加・削除にはOAuth（並び替えツールと同じ`auth/oauth.json`）を使うため、
-  GitHub Actions側の追加設定は不要
+- プレイリストの取得・追加・削除にはOAuth（並び替えツールと同じ`auth/oauth.json`）を使う。
+  加えて、GitHub Actionsのリポジトリシークレットに`YOUTUBE_API_KEY`（YouTube Data API v3の
+  APIキー）と`DISCORD_BOT_TOKEN`（コラボ・カバー判定ボタンのエラー通知用、後述）の登録が必要
 - **境界線付近の曲だけ再生回数を再取得する**: キャッシュに値がある曲でも、しきい値の80%以上
   100%未満（`BORDERLINE_THRESHOLD_RATIO`）の場合は、その場でYouTubeから再取得し直した
   最新の値で判定する。しきい値を大きく超えている曲は再生回数が減ることがなく今後も条件を
@@ -371,3 +372,10 @@ CLI版（`python score_playlist.py`）とは動作が異なり、**自分の全�
     日を跨いで補完的に探索される（見つけられなくても再生回数記録自体は初回から全曲終わる）
     （通常のスコアリングは`known_video_id`のおかげで`search.list`をほぼ使わないため、
     1日あたりのクォータ約100回分の大半をこちらに割り当てられる）
+  - **ボタン確定時のエラー通知**: 「はい/いいえ」ボタンを押した後の判定記録処理
+    （`cover_decide`）は、元の`/score`実行のinteraction_tokenを持たない（Workerが
+    ボタン操作のinteractionには既に同期応答を返しているため）。そのため記録に失敗した場合は
+    Botトークン（`DISCORD_BOT_TOKEN`）でボタンが押されたチャンネルに直接エラーメッセージを
+    送る（`post_channel_message`）。この用途のためだけに、GitHub Actionsのリポジトリ
+    シークレットに`DISCORD_BOT_TOKEN`（[Discord Developer Portal](https://discord.com/developers/applications)の
+    「Bot」ページで取得したもの。手順2で控えたものと同じ）を登録しておく必要がある

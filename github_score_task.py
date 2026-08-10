@@ -250,6 +250,20 @@ def post_followup(application_id: str, interaction_token: str, content: str) -> 
     post_followup_payload(application_id, interaction_token, {"content": content})
 
 
+def post_channel_message(channel_id: str, content: str) -> None:
+    """Botトークンで指定チャンネルに直接メッセージを送る。`cover_decide`はボタン操作の
+    interaction_tokenを持たない（Workerが既にそのinteractionへ同期応答を返しているため）ので、
+    エラー通知にはwebhookのfollowupではなくこちらを使う。`DISCORD_BOT_TOKEN`が必要。
+    """
+    bot_token = os.environ["DISCORD_BOT_TOKEN"]
+    resp = requests.post(
+        f"{DISCORD_API}/channels/{channel_id}/messages",
+        headers={"Authorization": f"Bot {bot_token}"},
+        json={"content": content},
+    )
+    _raise_with_body(resp)
+
+
 def build_cover_candidate_components(batch: list) -> list:
     """コラボ・カバー候補1件につき「はい」「いいえ」ボタン1行を作る。custom_idは
     `covyes:{video_id}` / `covno:{video_id}`（video_idは11文字固定なのでDiscordの
@@ -474,7 +488,23 @@ def main() -> None:
     mode = os.environ.get("TASK_MODE", "score")
 
     if mode == "cover_decide":
-        run_cover_decide(os.environ["VIDEO_ID"], os.environ["DECISION"])
+        video_id = os.environ["VIDEO_ID"]
+        decision = os.environ["DECISION"]
+        channel_id = os.environ.get("CHANNEL_ID")
+        try:
+            run_cover_decide(video_id, decision)
+        except Exception as e:
+            # このモードはボタン操作のinteraction_tokenを持たないため、Botトークンで
+            # チャンネルへ直接エラーを送る（channel_idが無ければ通知しようがないので諦める）
+            if channel_id:
+                try:
+                    post_channel_message(
+                        channel_id,
+                        f"コラボ・カバー候補の判定記録に失敗しました（video_id: {video_id}）: {e}",
+                    )
+                except requests.RequestException:
+                    pass
+            raise
         return
 
     threshold = int(os.environ["THRESHOLD"])

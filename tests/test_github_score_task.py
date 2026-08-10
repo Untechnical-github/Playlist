@@ -4,6 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 import github_score_task as gst
 
 
@@ -596,6 +598,84 @@ def test_run_cover_decide_does_nothing_when_video_id_unknown(monkeypatch):
     gst.run_cover_decide("unknown_video", "yes")
 
     assert committed == []
+
+
+# --- cover_decideモードのエラー通知（post_channel_message / main） ---
+
+
+def test_post_channel_message_sends_via_bot_token(monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "secret-bot-token")
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+    def fake_post(url, headers=None, json=None):
+        calls.append((url, headers, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr(gst.requests, "post", fake_post)
+
+    gst.post_channel_message("channel123", "エラーが発生しました")
+
+    assert len(calls) == 1
+    url, headers, payload = calls[0]
+    assert url == f"{gst.DISCORD_API}/channels/channel123/messages"
+    assert headers == {"Authorization": "Bot secret-bot-token"}
+    assert payload == {"content": "エラーが発生しました"}
+
+
+def test_main_cover_decide_reports_error_to_channel_on_failure(monkeypatch):
+    monkeypatch.setenv("TASK_MODE", "cover_decide")
+    monkeypatch.setenv("VIDEO_ID", "vid123")
+    monkeypatch.setenv("DECISION", "yes")
+    monkeypatch.setenv("CHANNEL_ID", "chan456")
+
+    def fail_run_cover_decide(video_id, decision):
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(gst, "run_cover_decide", fail_run_cover_decide)
+
+    posted = []
+    monkeypatch.setattr(gst, "post_channel_message", lambda channel_id, content: posted.append((channel_id, content)))
+
+    with pytest.raises(RuntimeError):
+        gst.main()
+
+    assert posted == [("chan456", "コラボ・カバー候補の判定記録に失敗しました（video_id: vid123）: commit failed")]
+
+
+def test_main_cover_decide_skips_notification_without_channel_id(monkeypatch):
+    # channel_idが渡っていない（Worker側が古い等）場合は通知しようがないので静かに諦める
+    monkeypatch.setenv("TASK_MODE", "cover_decide")
+    monkeypatch.setenv("VIDEO_ID", "vid123")
+    monkeypatch.setenv("DECISION", "yes")
+    monkeypatch.delenv("CHANNEL_ID", raising=False)
+
+    monkeypatch.setattr(
+        gst, "run_cover_decide", lambda video_id, decision: (_ for _ in ()).throw(RuntimeError("commit failed"))
+    )
+    monkeypatch.setattr(
+        gst, "post_channel_message", lambda *a, **k: (_ for _ in ()).throw(AssertionError("通知されるべきではない"))
+    )
+
+    with pytest.raises(RuntimeError):
+        gst.main()
+
+
+def test_main_cover_decide_does_not_post_when_successful(monkeypatch):
+    monkeypatch.setenv("TASK_MODE", "cover_decide")
+    monkeypatch.setenv("VIDEO_ID", "vid123")
+    monkeypatch.setenv("DECISION", "yes")
+    monkeypatch.setenv("CHANNEL_ID", "chan456")
+
+    monkeypatch.setattr(gst, "run_cover_decide", lambda video_id, decision: None)
+    monkeypatch.setattr(
+        gst, "post_channel_message", lambda *a, **k: (_ for _ in ()).throw(AssertionError("通知されるべきではない"))
+    )
+
+    gst.main()  # 例外を投げなければOK
 
 
 # --- Discordへの通知（はい/いいえボタン） ---
