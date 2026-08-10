@@ -138,9 +138,14 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
     view_count_threshold = threshold * VIEW_UNIT
     cache, fetched_at = load_view_cache()
     matches = []
+    # この曲自体（クレジット通りの動画）の再生回数が確定した（キャッシュ由来の値が得られた）
+    # video_id の集合。クォータ超過等で今回検証できなかった曲はここに入らないため、
+    # 「対象から漏れた」＝「しきい値未満」と誤って削除しないようにする（下記の削除判定で使う）
+    verified_video_ids = set()
     try:
         for t in all_tracks:
             override_artists = resolve_override_artists(t["title"], overrides)
+            own_key = (t["title"], t["artist"])
 
             # 追加するのは常にこの曲自体（クレジット通りの動画）の video_id。しきい値の判定は、
             # この曲自体に加えて上書き設定の候補アーティストも調べ、最大の再生回数を採用する
@@ -162,6 +167,10 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
                     for a in override_artists
                 ]
                 view_count = max([own_view_count] + alt_view_counts)
+
+            if own_key in cache:
+                # 再生回数がキャッシュ由来（今回新規取得できた、または以前からの既知の値）で確定している
+                verified_video_ids.add(cache[own_key][0])
 
             if video_id and view_count >= view_count_threshold:
                 matches.append((t, video_id, view_count))
@@ -195,13 +204,19 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
         newly_added.append((t, view_count))
 
     removed = []
+    skipped = []
     for video_id, item in original_by_video_id.items():
         if video_id in qualifying_video_ids:
+            continue
+        if video_id not in verified_video_ids:
+            # クォータ超過等で今回は再生回数を確認できなかった曲。しきい値未満と確定していないので
+            # 誤って削除しない（次回、確認できたときに改めて判定する）
+            skipped.append(item["snippet"].get("title", video_id))
             continue
         remove_playlist_item(auth_header, item["id"])
         removed.append(item["snippet"].get("title", video_id))
 
-    if not newly_added and not removed:
+    if not newly_added and not removed and not skipped:
         post_followup(
             application_id,
             interaction_token,
@@ -210,13 +225,24 @@ def run_score(threshold: int, application_id: str, interaction_token: str) -> No
         )
         return
 
-    header = (
-        f"**「{TARGET_PLAYLIST_NAME}」を更新しました**"
-        f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
-        f"追加{len(newly_added)}曲・削除{len(removed)}曲）\n"
-    )
+    if newly_added or removed:
+        header = (
+            f"**「{TARGET_PLAYLIST_NAME}」を更新しました**"
+            f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
+            f"追加{len(newly_added)}曲・削除{len(removed)}曲"
+            + (f"・確認できず保留{len(skipped)}曲" if skipped else "")
+            + "）\n"
+        )
+    else:
+        # 追加・削除は無いが、確認できず保留にした曲だけはある場合
+        header = (
+            f"**「{TARGET_PLAYLIST_NAME}」に追加・削除の変更はありませんでした**"
+            f"（しきい値: {threshold}万回再生以上、集計対象プレイリスト{len(source_playlists)}件、"
+            f"確認できず保留{len(skipped)}曲）\n"
+        )
     lines = [f"・追加: {t['title']} - {t['artist']}（views: {view_count:,}）" for t, view_count in newly_added]
     lines += [f"・削除: {title}（しきい値未満になったため）" for title in removed]
+    lines += [f"・保留: {title}（再生回数を確認できなかったため削除せず維持）" for title in skipped]
     send_paginated_message(application_id, interaction_token, header, lines)
 
 

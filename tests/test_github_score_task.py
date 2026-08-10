@@ -62,13 +62,15 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
         return tracks_by_playlist[playlist_id]
 
     def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
-        return views_by_track[(title, artist)]
+        result = views_by_track[(title, artist)]
+        cache[(title, artist)] = result  # 実際のget_youtube_view_countと同様、確認できた曲はキャッシュに書く
+        return result
 
     added = []
     removed = []
 
     # 「Playlist」には既に v3 (Song C、今回も条件を満たす) と、
-    # v_old (今回の集計対象には出てこない＝しきい値を満たさなくなった曲) が入っている
+    # v_old (集計対象のどのプレイリストにも出てこない＝今回は検証しようがない曲) が入っている
     existing_playlist_items = [
         {"id": "item_v3", "contentDetails": {"videoId": "v3"}, "snippet": {"title": "Song C - Artist C"}},
         {"id": "item_old", "contentDetails": {"videoId": "v_old"}, "snippet": {"title": "Old Song - Old Artist"}},
@@ -98,13 +100,14 @@ def test_run_score_aggregates_multiple_source_playlists_and_reports_only_new_add
     assert set(fetched_playlist_ids) == {"PL_SRC_1", "PL_SRC_2"}
 
     assert added == [("PL_TARGET", "v1")]  # Song A のみ新規追加（Song Cは既存なので追加しない）
-    assert removed == ["item_old"]  # 今回の対象に無い v_old だけ削除、v3(既存かつ条件を満たす)は削除しない
+    # v_oldはどの集計対象プレイリストにも出てこず今回検証できないため、削除せず保留する
+    assert removed == []
 
     combined = "".join(sent)
     assert "Song A" in combined
     assert "Song B" not in combined  # しきい値未満
     assert "Song C" not in combined  # 既に追加済みで今回も条件を満たすので追加/削除どちらの報告にも出ない
-    assert "Old Song" in combined  # 削除された曲として報告される
+    assert "Old Song" in combined  # 保留された曲として報告される
 
 
 def test_resolve_override_artists_matches_on_title_substring():
@@ -139,7 +142,9 @@ def test_run_score_uses_override_artist_view_count_but_adds_the_cover_track(monk
     monkeypatch.setattr(
         gst,
         "get_youtube_view_count",
-        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: views[(title, artist)],
+        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: cache.setdefault(
+            (title, artist), views[(title, artist)]
+        ),
     )
     monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
     monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
@@ -180,7 +185,9 @@ def test_run_score_qualifies_when_any_override_variant_exceeds_threshold(monkeyp
     monkeypatch.setattr(
         gst,
         "get_youtube_view_count",
-        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: views[(title, artist)],
+        lambda youtube, title, artist, cache, fetched_at, force_refresh=False: cache.setdefault(
+            (title, artist), views[(title, artist)]
+        ),
     )
     monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
     monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
@@ -222,8 +229,11 @@ def test_run_score_only_force_refetches_tracks_within_80_percent_of_threshold(mo
     def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
         if force_refresh:
             force_refresh_calls.append((title, artist))
-            return ("v_mid", 1_500_000)
-        return initial_views[(title, artist)]
+            result = ("v_mid", 1_500_000)
+        else:
+            result = initial_views[(title, artist)]
+        cache[(title, artist)] = result
+        return result
 
     monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
     monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
@@ -262,8 +272,13 @@ def test_run_score_force_refetches_override_artist_when_combined_view_count_is_b
         if force_refresh:
             force_refresh_artists.append(artist)
             if artist == "BUMP OF CHICKEN":
-                return ("orig_v1", 1_200_000)  # 再取得後はしきい値超え
-        return initial_views[(title, artist)]
+                result = ("orig_v1", 1_200_000)  # 再取得後はしきい値超え
+            else:
+                result = initial_views[(title, artist)]
+        else:
+            result = initial_views[(title, artist)]
+        cache[(title, artist)] = result
+        return result
 
     added = []
 
@@ -284,3 +299,45 @@ def test_run_score_force_refetches_override_artist_when_combined_view_count_is_b
 
     assert set(force_refresh_artists) == {"Suisei Hoshimachi", "BUMP OF CHICKEN"}
     assert added == ["cover_v1"]  # 再取得後の元曲再生回数が超えたため対象になる
+
+
+def test_run_score_does_not_remove_item_when_lookup_could_not_be_verified_this_run(monkeypatch):
+    # クォータ超過等でAPI呼び出しが失敗し、かつ以前にキャッシュされたこともない曲は
+    # 「しきい値未満」と確定できないため、既にPlaylistに入っていても削除してはいけない
+    # （人気の高いEveの曲が誤って削除された実際の不具合の再現ケース）
+    playlists = [
+        {"id": "PL_SRC", "snippet": {"title": "Eve"}},
+        {"id": "PL_TARGET", "snippet": {"title": "Playlist"}},
+    ]
+    tracks = [{"title": "廻廻奇譚", "artist": "Eve"}]
+
+    def fake_get_youtube_view_count(youtube, title, artist, cache, fetched_at, force_refresh=False):
+        # 実際のAPIエラー時と同様、結果を確定できないのでcacheには書き込まない
+        return (None, 0)
+
+    existing_playlist_items = [
+        {"id": "item_kaikai", "contentDetails": {"videoId": "kaikai_v1"}, "snippet": {"title": "廻廻奇譚 - Eve MV"}},
+    ]
+
+    removed = []
+
+    monkeypatch.setattr(gst, "fetch_playlist_tracks", lambda playlist_id: tracks)
+    monkeypatch.setattr(gst, "get_youtube_view_count", fake_get_youtube_view_count)
+    monkeypatch.setattr(gst, "load_view_cache", lambda: ({}, {}))
+    monkeypatch.setattr(gst, "save_view_cache", lambda cache, fetched_at: None)
+    monkeypatch.setattr(gst, "build_youtube_client", lambda: object())
+    monkeypatch.setattr(gst, "get_auth_header", lambda: "Bearer fake")
+    monkeypatch.setattr(gst, "list_my_playlists", lambda auth_header: playlists)
+    monkeypatch.setattr(gst, "list_playlist_items", lambda auth_header, playlist_id: existing_playlist_items)
+    monkeypatch.setattr(gst, "add_playlist_item", lambda auth_header, playlist_id, video_id: None)
+    monkeypatch.setattr(gst, "remove_playlist_item", lambda auth_header, item_id: removed.append(item_id))
+
+    sent = []
+    monkeypatch.setattr(gst, "post_followup", lambda app_id, token, content: sent.append(content))
+
+    gst.run_score(5000, "app", "tok")  # 5000万回再生以上
+
+    assert removed == []  # 確認できなかったので削除しない
+    combined = "".join(sent)
+    assert "廻廻奇譚" in combined
+    assert "保留" in combined
