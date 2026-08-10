@@ -450,8 +450,8 @@ def test_discover_cover_candidates_finds_candidate_via_ytmusic_without_youtube_f
         assert title == "廻廻奇譚"
         return [
             ("own_v1", "廻廻奇譚 - Eve MV", "Eve"),  # 自分自身は候補から除外される
-            ("cover_v1", "廻廻奇譚 (Cover)", "Someone"),
-            ("cover_v2", "廻廻奇譚 (Piano ver.)", "Someone Else"),
+            ("cover_v1", "廻廻奇譚 (Cover) - originally by Eve", "Someone"),
+            ("cover_v2", "廻廻奇譚 (Piano ver.) / Eve", "Someone Else"),
             ("unrelated_v1", "全然関係ない動画", "Unrelated"),  # 曲名を含まないので除外される
         ]
 
@@ -504,9 +504,9 @@ def test_discover_cover_candidates_excludes_candidates_from_the_same_artist(monk
 
     def fake_ytmusic_search(yt, title, max_results=5):
         return [
-            ("lyric_v1", "廻廻奇譚 (Lyric Video)", "Eve"),  # 本人の別アップロード → 除外
-            ("official_v1", "廻廻奇譚 Official Audio", "Eve Official"),  # 同様に除外
-            ("cover_v1", "廻廻奇譚 (Cover)", "Someone Else"),  # 別人のカバー → 候補になる
+            ("lyric_v1", "廻廻奇譚 (Lyric Video) - Eve", "Eve"),  # 本人の別アップロード → 除外
+            ("official_v1", "廻廻奇譚 Official Audio - Eve", "Eve Official"),  # 同様に除外
+            ("cover_v1", "廻廻奇譚 (Cover) - originally by Eve", "Someone Else"),  # 別人のカバー → 候補になる
         ]
 
     def fake_stats(youtube, video_ids):
@@ -523,6 +523,33 @@ def test_discover_cover_candidates_excludes_candidates_from_the_same_artist(monk
     assert result[0]["video_id"] == "cover_v1"
 
 
+def test_discover_cover_candidates_requires_artist_name_in_video_title(monkeypatch):
+    # 曲名だけの検索は無関係な動画（別の曲・反応動画・まとめ動画等）まで拾ってしまいやすいため、
+    # 動画タイトルに元のアーティスト名も含まれているものだけを候補にする
+    tracks = [{"title": "廻廻奇譚", "artist": "Eve"}]
+    cache = {("廻廻奇譚", "Eve"): ("own_v1", 500_000)}
+    cover_candidates = {}
+
+    def fake_ytmusic_search(yt, title, max_results=5):
+        return [
+            ("no_artist_v1", "廻廻奇譚 歌ってみた", "Someone"),  # タイトルにEveが無い → 除外
+            ("with_artist_v1", "廻廻奇譚 (Eveのカバー)", "Someone"),  # タイトルにEveがある → 候補になる
+        ]
+
+    def fake_stats(youtube, video_ids):
+        assert set(video_ids) == {"with_artist_v1"}
+        return {"with_artist_v1": 1_000_000}
+
+    monkeypatch.setattr(gst, "search_videos_by_title_ytmusic", fake_ytmusic_search)
+    monkeypatch.setattr(gst, "get_view_counts_for_video_ids", fake_stats)
+    _no_commit(monkeypatch)
+
+    result = gst.discover_cover_candidates(object(), object(), tracks, cache, 1_000_000, cover_candidates)
+
+    assert len(result) == 1
+    assert result[0]["video_id"] == "with_artist_v1"
+
+
 def test_discover_cover_candidates_falls_back_to_youtube_when_ytmusic_finds_nothing(monkeypatch):
     tracks = [{"title": "廻廻奇譚", "artist": "Eve"}]
     cache = {("廻廻奇譚", "Eve"): ("own_v1", 500_000)}
@@ -531,7 +558,7 @@ def test_discover_cover_candidates_falls_back_to_youtube_when_ytmusic_finds_noth
     monkeypatch.setattr(gst, "search_videos_by_title_ytmusic", lambda yt, title, max_results=5: [])
 
     def fake_youtube_search(youtube, title, max_results=5):
-        return [("cover_v1", "廻廻奇譚 (Cover)", "Someone")]
+        return [("cover_v1", "廻廻奇譚 (Cover) - originally by Eve", "Someone")]
 
     monkeypatch.setattr(gst, "search_videos_by_title", fake_youtube_search)
     monkeypatch.setattr(gst, "get_view_counts_for_video_ids", lambda youtube, ids: {"cover_v1": 1_000_000})
@@ -729,6 +756,62 @@ def test_run_cover_decide_does_nothing_when_video_id_unknown(monkeypatch):
 # --- cover_decideモードのエラー通知（post_channel_message / main） ---
 
 
+class _FakeDiscordResponse:
+    def __init__(self, status_code, retry_after=None, text=""):
+        self.status_code = status_code
+        self._retry_after = retry_after
+        self.text = text
+
+    def json(self):
+        return {"retry_after": self._retry_after} if self._retry_after is not None else {}
+
+
+def test_post_discord_with_retry_retries_on_429_and_eventually_succeeds(monkeypatch):
+    responses = [
+        _FakeDiscordResponse(429, retry_after=0.01),
+        _FakeDiscordResponse(429, retry_after=0.01),
+        _FakeDiscordResponse(200),
+    ]
+    calls = []
+
+    def fake_post(url, json=None, headers=None):
+        calls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr(gst.requests, "post", fake_post)
+    slept = []
+    monkeypatch.setattr(gst.time, "sleep", lambda seconds: slept.append(seconds))
+
+    resp = gst._post_discord_with_retry("https://example.test/x", {"content": "hi"})
+
+    assert resp.status_code == 200
+    assert len(calls) == 3
+    assert len(slept) == 2  # 429だった2回分だけ待つ
+
+
+def test_post_discord_with_retry_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setattr(
+        gst.requests, "post", lambda url, json=None, headers=None: _FakeDiscordResponse(429, retry_after=0.01)
+    )
+    monkeypatch.setattr(gst.time, "sleep", lambda seconds: None)
+
+    resp = gst._post_discord_with_retry("https://example.test/x", {"content": "hi"})
+
+    assert resp.status_code == 429  # 諦めて最後のレスポンスをそのまま返す
+
+
+def test_post_followup_payload_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(
+        gst.requests,
+        "post",
+        lambda url, json=None, headers=None: _FakeDiscordResponse(429, retry_after=0.01, text="rate limited"),
+    )
+    monkeypatch.setattr(gst.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(gst.requests.exceptions.HTTPError):
+        gst.post_followup_payload("app", "tok", {"content": "hi"})
+
+
 def test_post_channel_message_sends_via_bot_token(monkeypatch):
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "secret-bot-token")
     calls = []
@@ -859,7 +942,7 @@ def test_run_score_notifies_discord_when_discovery_finds_a_new_cover_candidate(m
         return cache[(title, artist)]
 
     def fake_youtube_search(youtube, title, max_results=5):
-        return [("cover_v1", "廻廻奇譚 (Cover)", "Someone")]
+        return [("cover_v1", "廻廻奇譚 (Cover) - originally by Eve", "Someone")]
 
     def fake_stats(youtube, video_ids):
         return {"cover_v1": 2_000_000}

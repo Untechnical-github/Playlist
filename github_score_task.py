@@ -1,7 +1,9 @@
 import json
+import logging
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -27,7 +29,11 @@ from score_playlist import (
     was_daily_quota_exceeded,
 )
 
+logger = logging.getLogger("github_score_task")
+
 DISCORD_API = "https://discord.com/api/v10"
+DISCORD_RATE_LIMIT_MAX_RETRIES = 5  # コラボ・カバー候補の通知等でDiscordへの投稿が連続すると
+# 429（レート制限）を返されることがあるため、応答の retry_after 秒待ってから再試行する
 
 TARGET_PLAYLIST_NAME = "Playlist"
 EXCLUDED_TITLE_PREFIX = "Playlist"  # "Playlist"・"Playlist II" 等、集計先とその仲間は対象外
@@ -102,13 +108,21 @@ def _pick_best_new_candidate(
     youtube, results: list, own_video_id, known_candidate_ids: set, title_lower: str, track_artist: str
 ):
     """検索結果から、自分自身・既知の候補・本人による別アップロードらしきものを除いた新規候補の
-    うち再生回数最大の1件を選ぶ。見つからなければNoneを返す。"""
+    うち再生回数最大の1件を選ぶ。見つからなければNoneを返す。
+
+    曲名だけの検索は無関係な動画（反応動画・別の曲・まとめ動画等）まで拾ってしまいがちなので、
+    動画タイトルに曲名だけでなく元のアーティスト名も含まれているものだけを候補にする
+    （例:「曲名 (Cover) - 元のアーティスト名」）。本人による別アップロードらしきものは
+    タイトルにアーティスト名が含まれていても`_looks_like_same_artist`で別途除外する。
+    """
+    artist_lower = track_artist.strip().lower()
     new_results = [
         (video_id, video_title, channel)
         for video_id, video_title, channel in results
         if video_id != own_video_id
         and video_id not in known_candidate_ids
         and title_lower in video_title.lower()
+        and artist_lower in video_title.lower()
         and not _looks_like_same_artist(channel, track_artist)
     ]
     if not new_results:
@@ -263,11 +277,31 @@ def _raise_with_body(resp: requests.Response) -> None:
         )
 
 
+def _post_discord_with_retry(url: str, payload: dict, headers: Optional[dict] = None) -> requests.Response:
+    """Discordへの投稿はレート制限（429）にかかることがある。コラボ・カバー候補の通知のように
+    短時間に何通も送る場合に起きやすいため、応答の`retry_after`（秒）だけ待って再試行する。
+    """
+    resp = requests.post(url, json=payload, headers=headers)
+    for attempt in range(1, DISCORD_RATE_LIMIT_MAX_RETRIES + 1):
+        if resp.status_code != 429 or attempt == DISCORD_RATE_LIMIT_MAX_RETRIES:
+            return resp
+        try:
+            retry_after = float(resp.json().get("retry_after", 1.0))
+        except (ValueError, TypeError, AttributeError):
+            retry_after = 1.0
+        logger.warning(
+            "Discord rate limited (attempt %d/%d); retrying in %.2fs",
+            attempt,
+            DISCORD_RATE_LIMIT_MAX_RETRIES,
+            retry_after,
+        )
+        time.sleep(retry_after + 0.1)
+        resp = requests.post(url, json=payload, headers=headers)
+    return resp
+
+
 def post_followup_payload(application_id: str, interaction_token: str, payload: dict) -> None:
-    resp = requests.post(
-        f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}",
-        json=payload,
-    )
+    resp = _post_discord_with_retry(f"{DISCORD_API}/webhooks/{application_id}/{interaction_token}", payload)
     _raise_with_body(resp)
 
 
@@ -281,10 +315,10 @@ def post_channel_message(channel_id: str, content: str) -> None:
     エラー通知にはwebhookのfollowupではなくこちらを使う。`DISCORD_BOT_TOKEN`が必要。
     """
     bot_token = os.environ["DISCORD_BOT_TOKEN"]
-    resp = requests.post(
+    resp = _post_discord_with_retry(
         f"{DISCORD_API}/channels/{channel_id}/messages",
+        {"content": content},
         headers={"Authorization": f"Bot {bot_token}"},
-        json={"content": content},
     )
     _raise_with_body(resp)
 
