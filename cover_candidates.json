@@ -619,7 +619,7 @@
       "view_count": 47232521
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
@@ -1171,7 +1171,7 @@
   },
   "Romance\u001fYOASOBI": {
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     },
     "fiRjp6y6QvI": {
@@ -2064,8 +2064,14 @@
     }
   },
   "もう少しだけ\u001fYOASOBI": {
+    "7LDz7oX8INc": {
+      "candidate_channel": "YoshYoshYosh",
+      "candidate_title": "YOASOBI『もう少しだけ』(Mou Sukoshi Dake) [日本語 | Romaji | Eng ] 歌詞 LYRICS",
+      "status": "pending",
+      "view_count": 966960
+    },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     },
     "pdBSwEay_lo": {
@@ -2088,6 +2094,12 @@
     }
   },
   "もしも命が描けたら\u001fYOASOBI": {
+    "Bmk6AWPM2b0": {
+      "candidate_channel": "mimanimi",
+      "candidate_title": "YOASOBI - Moshimo Inochi Ga Egaketara 「もしも命が描けたら」Lyrics Video [Kan/Rom/Eng]",
+      "status": "pending",
+      "view_count": 206932
+    },
     "Ya9_9yot2ek": {
       "candidate_channel": "手っ",
       "candidate_title": "【MAD】葬送のフリーレン×もしも命が描けたら",
@@ -2095,7 +2107,7 @@
       "view_count": 97837
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
@@ -2185,8 +2197,14 @@
       "view_count": 5746288
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
+    },
+    "yXxrN-fio3E": {
+      "candidate_channel": "mimanimi",
+      "candidate_title": "YOASOBI - Adventure「 アドベンチャー」Lyrics Video [Kan/Rom/Eng]",
+      "status": "pending",
+      "view_count": 367101
     }
   },
   "アドレナ\u001fYOASOBI": {
@@ -2689,7 +2707,7 @@
   },
   "セブンティーン\u001fYOASOBI": {
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     },
     "w8rC3SVSEYg": {
@@ -3073,7 +3091,7 @@
   },
   "ミスター\u001fYOASOBI": {
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     },
     "pHtDaScwNjU": {
@@ -3289,7 +3307,7 @@
       "view_count": 25655091
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
@@ -3445,7 +3463,7 @@
       "view_count": 1032615
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
@@ -3589,7 +3607,7 @@
       "view_count": 29097417
     },
     "_meta": {
-      "youtube_checked": false,
+      "youtube_checked": true,
       "ytmusic_checked": true
     }
   },
